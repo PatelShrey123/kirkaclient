@@ -201,14 +201,6 @@ const base_url = settings.base_url;
         const code = match[1];
         latestCode = code; // track latest
 
-        // Unclip ancestors
-        let anc = el;
-        for (let j = 0; j < 5 && anc; j++) {
-          anc.style.setProperty('overflow', 'visible', 'important');
-          anc.style.setProperty('max-height', 'none', 'important');
-          anc = anc.parentElement;
-        }
-
         // Create inline button
         const btn = document.createElement('button');
         btn.type = 'button';
