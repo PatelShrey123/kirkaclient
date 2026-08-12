@@ -48,50 +48,130 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   opener();
   customReqScripts(settings);
+  setupChatObserver();
 
   const fetchAll = async () => {
-    const [customizations, user] = await Promise.all([
-      fetch("https://juice-api.irrvlo.xyz/api/customizations").then((r) =>
-        r.json()
-      ),
-      fetch(`https://api.kirka.io/api/user`, {
+    try {
+      const user = await fetch(`https://api.kirka.io/api/user`, {
         headers: {
           Authorization: `Bearer ${localStorage.getItem("token")}`,
         },
-      }).then((r) => r.json()),
-    ]);
+      }).then((r) => r.json());
 
-    localStorage.setItem(
-      "juice-customizations",
-      JSON.stringify(customizations)
-    );
-    localStorage.setItem(
-      "current-user",
-      JSON.stringify(user.statusCode === 401 ? "" : user)
-    );
+      localStorage.setItem(
+        "kirkaxpert-customizations",
+        JSON.stringify([])
+      );
+      localStorage.setItem(
+        "current-user",
+        JSON.stringify(user.statusCode === 401 ? "" : user)
+      );
+    } catch (error) {
+      console.error("Error fetching current user:", error);
+      localStorage.setItem("kirkaxpert-customizations", JSON.stringify([]));
+      localStorage.setItem("current-user", JSON.stringify(""));
+    }
   };
   fetchAll();
 
   const formatLink = (link) => link.replace(/\\/g, "/");
 
+  const sendChatMessage = (message) => {
+    const chatInput = document.querySelector(".chat input") || 
+                      document.querySelector("#chat input") || 
+                      document.querySelector("input[placeholder*='chat' i]") || 
+                      document.querySelector("input[placeholder*='message' i]") ||
+                      document.querySelector(".desktop-game-interface input");
+    if (chatInput) {
+      chatInput.value = message;
+      chatInput.dispatchEvent(new Event('input', { bubbles: true }));
+      const enterEvent = new KeyboardEvent('keydown', {
+        key: 'Enter',
+        keyCode: 13,
+        code: 'Enter',
+        which: 13,
+        bubbles: true
+      });
+      chatInput.dispatchEvent(enterEvent);
+      return true;
+    }
+    return false;
+  };
+
+  const setupChatObserver = () => {
+    const appContainer = document.querySelector("#app") || document.body;
+    if (!appContainer) return;
+
+    const observer = new MutationObserver((mutations) => {
+      mutations.forEach((mutation) => {
+        mutation.addedNodes.forEach((node) => {
+          if (node.nodeType === Node.ELEMENT_NODE) {
+            const text = node.innerText || "";
+            const uuidRegex = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i;
+            const tradeAcceptRegex = /\/trade\s+accept\s+([0-9a-f-]+)/i;
+            
+            let tradeCode = null;
+            const matchAccept = text.match(tradeAcceptRegex);
+            if (matchAccept) {
+              tradeCode = matchAccept[1];
+            } else {
+              const matchUuid = text.match(uuidRegex);
+              if (matchUuid) {
+                tradeCode = matchUuid[0];
+              }
+            }
+
+            if (tradeCode && !node.querySelector(".quick-accept-btn")) {
+              const btn = document.createElement("button");
+              btn.innerText = "Quick Accept";
+              btn.className = "quick-accept-btn";
+              btn.style = "background: linear-gradient(135deg, #ffd700, #b6830e); color: black; border: 1px solid #ffb914; padding: 3px 8px; margin-left: 10px; font-weight: bold; border-radius: 4px; cursor: pointer; font-size: 11px; font-family: sans-serif; text-shadow: none; box-shadow: 0 1px 3px rgba(0,0,0,0.5);";
+              btn.onclick = (e) => {
+                e.stopPropagation();
+                btn.disabled = true;
+                btn.innerText = "Accepting...";
+                btn.style.background = "#555";
+                btn.style.borderColor = "#444";
+                
+                sendChatMessage(`/trade accept ${tradeCode}`);
+                
+                setTimeout(() => {
+                  sendChatMessage("/trade confirm");
+                  btn.innerText = "Accepted!";
+                  btn.style.background = "#22c55e";
+                  btn.style.color = "white";
+                  btn.style.borderColor = "#16a34a";
+                  customNotification({ message: `Trade accept and confirm commands sent: ${tradeCode}` });
+                }, 1000);
+              };
+              node.appendChild(btn);
+            }
+          }
+        });
+      });
+    });
+
+    observer.observe(appContainer, { childList: true, subtree: true });
+  };
+
   const lobbyKeybindReminder = (settings) => {
     const keybindReminder = document.createElement("span");
-    keybindReminder.id = "juice-keybind-reminder";
+    keybindReminder.id = "kirkaxpert-keybind-reminder";
     keybindReminder.style = `position: absolute; left: 147px; bottom: 10px; font-size: 0.9rem; color: #fff; width: max-content`;
 
     keybindReminder.innerText = `Press ${settings.menu_keybind} to open the client menu.`;
 
     if (
       !document.querySelector("#app > .interface") ||
-      document.querySelector("#juice-keybind-reminder")
+      document.querySelector("#kirkaxpert-keybind-reminder")
     )
       return;
 
     document.querySelector("#app #left-icons").appendChild(keybindReminder);
-    document.addEventListener("juice-settings-changed", ({ detail }) => {
+    document.addEventListener("kirkaxpert-settings-changed", ({ detail }) => {
       if (detail.setting === "menu_keybind") {
         const keybindReminder = document.querySelector(
-          "#juice-keybind-reminder"
+          "#kirkaxpert-keybind-reminder"
         );
         if (keybindReminder)
           keybindReminder.innerText = `Press ${detail.value} to open the client menu.`;
@@ -110,10 +190,15 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (!general_news && !promotional_news && !event_news && !alert_news)
       return;
 
-    let news = await fetch("https://juice-api.irrvlo.xyz/api/news").then((r) =>
-      r.json()
-    );
-    if (!news.length) return;
+    let news = [
+      {
+        category: "general",
+        title: "KirkaXpert Client",
+        content: "Welcome to the custom desktop client. Check out the client menu by pressing ShiftRight!",
+        updatedAt: Date.now(),
+        live: true
+      }
+    ];
 
     news = news.filter(({ category }) => {
       const categories = {
@@ -251,21 +336,21 @@ document.addEventListener("DOMContentLoaded", async () => {
     news.forEach((newsItem) => createNewsCard(newsItem));
   };
 
-  const juiceDiscordButton = () => {
+  const kirkaxpertDiscordButton = () => {
     const btn = document.querySelectorAll(".card-cont.soc-group")[1];
-    if (!btn || document.querySelector("#juice-discord-btn")) return;
+    if (!btn || document.querySelector("#kirkaxpert-discord-btn")) return;
 
     const discordBtn = btn.cloneNode(true);
     discordBtn.className =
       "card-cont soc-group transfer-list-top-enter transfer-list-top-enter-active";
-    discordBtn.id = "juice-discord-btn";
+    discordBtn.id = "kirkaxpert-discord-btn";
     discordBtn.style = `
     background: linear-gradient(to top, rgba(255,147,45,.75), rgba(172,250,112,.75)) !important;
     border-bottom-color: #c47022 !important;
     border-top-color: #c5ff99 !important;
     border-right-color: #e48329 !important;`;
     const textDivs = discordBtn.querySelector(".text-soc").children;
-    textDivs[0].innerText = "JUICE";
+    textDivs[0].innerText = "XPERT";
     textDivs[1].innerText = "DISCORD";
 
     const i = document.createElement("i");
@@ -289,11 +374,11 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   const loadTheme = () => {
     const addedStyles = document.createElement("style");
-    addedStyles.id = "juice-styles-theme";
+    addedStyles.id = "kirkaxpert-styles-theme";
     document.head.appendChild(addedStyles);
 
     const customStyles = document.createElement("style");
-    customStyles.id = "juice-styles-custom";
+    customStyles.id = "kirkaxpert-styles-custom";
     document.head.appendChild(customStyles);
 
     const updateTheme = () => {
@@ -310,7 +395,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       customStyles.innerHTML = advancedCSS;
     };
 
-    document.addEventListener("juice-settings-changed", (e) => {
+    document.addEventListener("kirkaxpert-settings-changed", (e) => {
       if (
         e.detail.setting === "css_link" ||
         e.detail.setting === "css_enabled" ||
@@ -325,7 +410,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   const applyUIFeatures = () => {
     const addedStyles = document.createElement("style");
-    addedStyles.id = "juice-styles-ui-features";
+    addedStyles.id = "kirkaxpert-styles-ui-features";
     document.head.appendChild(addedStyles);
 
     const updateUIFeatures = () => {
@@ -382,12 +467,12 @@ document.addEventListener("DOMContentLoaded", async () => {
           "canvas { animation: rotateHue 1s linear infinite !important; }"
         );
       if (!settings.lobby_keybind_reminder)
-        styles.push("#juice-keybind-reminder { display: none; }");
+        styles.push("#kirkaxpert-keybind-reminder { display: none; }");
 
       addedStyles.innerHTML = styles.join("");
     };
 
-    document.addEventListener("juice-settings-changed", (e) => {
+    document.addEventListener("kirkaxpert-settings-changed", (e) => {
       const relevantSettings = [
         "perm_crosshair",
         "hide_chat",
@@ -410,10 +495,10 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     lobbyKeybindReminder(settings);
     lobbyNews(settings);
-    juiceDiscordButton();
+    kirkaxpertDiscordButton();
 
     const customizations = JSON.parse(
-      localStorage.getItem("juice-customizations")
+      localStorage.getItem("kirkaxpert-customizations")
     );
     const currentUser = JSON.parse(localStorage.getItem("current-user"));
 
@@ -440,12 +525,12 @@ document.addEventListener("DOMContentLoaded", async () => {
           lobbyNickname.style =
             "display: flex; align-items: flex-end; gap: 0.25rem; overflow: unset !important;";
 
-        if (lobbyNickname.querySelector(".juice-badges")) return;
+        if (lobbyNickname.querySelector(".kirkaxpert-badges")) return;
 
         const badgesElem = document.createElement("div");
         badgesElem.style =
           "display: flex; gap: 0.25rem; align-items: center; width: 0;";
-        badgesElem.className = "juice-badges";
+        badgesElem.className = "kirkaxpert-badges";
 
         lobbyNickname.appendChild(badgesElem);
 
@@ -453,14 +538,14 @@ document.addEventListener("DOMContentLoaded", async () => {
 
         if (customs.discord) {
           const linkedBadge = document.createElement("img");
-          linkedBadge.src = "https://juice.irrvlo.xyz/linked.png";
+          linkedBadge.src = "https://kirkaxpert.irrvlo.xyz/linked.png";
           linkedBadge.style = badgeStyle;
           badgesElem.appendChild(linkedBadge);
         }
 
         if (customs.booster) {
           const boosterBadge = document.createElement("img");
-          boosterBadge.src = "https://juice.irrvlo.xyz/booster.png";
+          boosterBadge.src = "https://kirkaxpert.irrvlo.xyz/booster.png";
           boosterBadge.style = badgeStyle;
           badgesElem.appendChild(boosterBadge);
         }
@@ -482,12 +567,12 @@ document.addEventListener("DOMContentLoaded", async () => {
       );
       lobbyNickname.style =
         "display: flex; align-items: flex-end; gap: 0.25rem;";
-      lobbyNickname.querySelector(".juice-badges")?.remove();
+      lobbyNickname.querySelector(".kirkaxpert-badges")?.remove();
     };
 
     if (settings.customizations) applyCustomizations();
 
-    document.addEventListener("juice-settings-changed", ({ detail }) => {
+    document.addEventListener("kirkaxpert-settings-changed", ({ detail }) => {
       if (detail.setting === "customizations")
         detail.value ? applyCustomizations() : removeCustomizations();
     });
@@ -620,11 +705,11 @@ document.addEventListener("DOMContentLoaded", async () => {
           const badgesElem = document.createElement("div");
           badgesElem.style =
             "display: flex; gap: 0.25rem; align-items: center;";
-          badgesElem.className = "juice-badges";
+          badgesElem.className = "kirkaxpert-badges";
           nickname.appendChild(badgesElem);
 
           const customizations = JSON.parse(
-            localStorage.getItem("juice-customizations")
+            localStorage.getItem("kirkaxpert-customizations")
           );
 
           if (customizations?.find((c) => c.shortId === shortId)) {
@@ -645,14 +730,14 @@ document.addEventListener("DOMContentLoaded", async () => {
 
             if (customs.discord) {
               const linkedBadge = document.createElement("img");
-              linkedBadge.src = "https://juice.irrvlo.xyz/linked.png";
+              linkedBadge.src = "https://kirkaxpert.irrvlo.xyz/linked.png";
               linkedBadge.style = badgeStyle;
               badgesElem.appendChild(linkedBadge);
             }
 
             if (customs.booster) {
               const boosterBadge = document.createElement("img");
-              boosterBadge.src = "https://juice.irrvlo.xyz/booster.png";
+              boosterBadge.src = "https://kirkaxpert.irrvlo.xyz/booster.png";
               boosterBadge.style = badgeStyle;
               badgesElem.appendChild(boosterBadge);
             }
@@ -682,8 +767,8 @@ document.addEventListener("DOMContentLoaded", async () => {
             gap: 0.5rem;
           `;
           div.innerHTML = `
-          <img src="https://juice.irrvlo.xyz/bubbles.png" style="height: 0.8rem; width: auto;" />
-          <span style="font-size: 1rem; font-weight: 600; color: #fff;">Juice Client Developer</span>
+          <img src="https://kirkaxpert.irrvlo.xyz/bubbles.png" style="height: 0.8rem; width: auto;" />
+          <span style="font-size: 1rem; font-weight: 600; color: #fff;">KirkaXpert Client Developer</span>
           `;
           profile.appendChild(div);
         }
@@ -727,12 +812,12 @@ document.addEventListener("DOMContentLoaded", async () => {
       deaths.addEventListener("DOMSubtreeModified", updateKD);
     };
 
-    document.addEventListener("juice-settings-changed", ({ detail }) => {
+    document.addEventListener("kirkaxpert-settings-changed", ({ detail }) => {
       if (detail.setting === "kd_indicator") settings.kd_indicator = detail.value;
       else if (detail.setting === "customizations") settings.customizations = detail.value;
     });
 
-    const customizations = JSON.parse(localStorage.getItem("juice-customizations"));
+    const customizations = JSON.parse(localStorage.getItem("kirkaxpert-customizations"));
 
     const interval = setInterval(() => {
       if (!document.querySelector(".desktop-game-interface")) {
@@ -749,7 +834,7 @@ document.addEventListener("DOMContentLoaded", async () => {
           const shortId = player.querySelector(".short-id")?.innerText.replace("#", "");
 
           if (!shortId) {
-            player.querySelector(".juice-badges")?.remove();
+            player.querySelector(".kirkaxpert-badges")?.remove();
             nickname.style = "";
             playerLeft.style = "";
             return;
@@ -758,13 +843,13 @@ document.addEventListener("DOMContentLoaded", async () => {
           const customs = customizations?.find((c) => c.shortId === shortId);
 
           if (customs) {
-            let badgesElem = player.querySelector(".juice-badges");
+            let badgesElem = player.querySelector(".kirkaxpert-badges");
 
             if (!badgesElem || badgesElem.dataset.shortId !== shortId) {
               badgesElem?.remove();
               badgesElem = document.createElement("div");
               badgesElem.style = "display: flex; gap: 0.25rem; align-items: center; margin-left: 0.25rem;";
-              badgesElem.className = "juice-badges";
+              badgesElem.className = "kirkaxpert-badges";
               badgesElem.dataset.shortId = shortId;
 
               nickname.style = "overflow: unset;";
@@ -798,21 +883,21 @@ document.addEventListener("DOMContentLoaded", async () => {
               }
             };
 
-            if (customs.discord) addBadge("https://juice.irrvlo.xyz/linked.png");
-            if (customs.booster) addBadge("https://juice.irrvlo.xyz/booster.png");
+            if (customs.discord) addBadge("https://kirkaxpert.irrvlo.xyz/linked.png");
+            if (customs.booster) addBadge("https://kirkaxpert.irrvlo.xyz/booster.png");
 
             if (customs.badges?.length) {
               customs.badges.forEach((badge) => addBadge(badge));
             }
           } else {
-            playerLeft.querySelector(".juice-badges")?.remove();
+            playerLeft.querySelector(".kirkaxpert-badges")?.remove();
             nickname.style = "";
             playerLeft.style = "";
           }
         });
       } else {
         tabplayers.forEach((player) => {
-          player.querySelector(".juice-badges")?.remove();
+          player.querySelector(".kirkaxpert-badges")?.remove();
           player.querySelector(".nickname").style = "";
           player.querySelector(".player-left").style = "";
         });
@@ -971,7 +1056,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       }
 
       const customizations = JSON.parse(
-        localStorage.getItem("juice-customizations")
+        localStorage.getItem("kirkaxpert-customizations")
       );
 
       if (settings.customizations) {
@@ -1005,7 +1090,7 @@ document.addEventListener("DOMContentLoaded", async () => {
               font-weight: 700 !important;
             `;
 
-            let badgesElem = nickname.querySelector(".juice-badges");
+            let badgesElem = nickname.querySelector(".kirkaxpert-badges");
 
             if (!badgesElem || badgesElem.dataset.shortId !== shortId) {
               if (badgesElem) badgesElem.remove();
@@ -1013,7 +1098,7 @@ document.addEventListener("DOMContentLoaded", async () => {
               badgesElem = document.createElement("div");
               badgesElem.style =
                 "display: flex; gap: 0.25rem; align-items: center; width: 0;";
-              badgesElem.className = "juice-badges";
+              badgesElem.className = "kirkaxpert-badges";
               badgesElem.dataset.shortId = shortId;
               nickname.appendChild(badgesElem);
             } else if (badgesElem.dataset.shortId === shortId) return;
@@ -1022,14 +1107,14 @@ document.addEventListener("DOMContentLoaded", async () => {
 
             if (customs.discord) {
               const linkedBadge = document.createElement("img");
-              linkedBadge.src = "https://juice.irrvlo.xyz/linked.png";
+              linkedBadge.src = "https://kirkaxpert.irrvlo.xyz/linked.png";
               linkedBadge.style.cssText = badgeStyle;
               badgesElem.appendChild(linkedBadge);
             }
 
             if (customs.booster) {
               const boosterBadge = document.createElement("img");
-              boosterBadge.src = "https://juice.irrvlo.xyz/booster.png";
+              boosterBadge.src = "https://kirkaxpert.irrvlo.xyz/booster.png";
               boosterBadge.style.cssText = badgeStyle;
               badgesElem.appendChild(boosterBadge);
             }
@@ -1095,12 +1180,25 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   ipcRenderer.on("notification", (_, data) => customNotification(data));
 
+  const checkRedirects = (url) => {
+    if (url.includes(`${base_url}profile/`)) {
+      const parts = url.split("profile/");
+      const id = parts[1] ? parts[1].replace(/[:#]/g, "").toUpperCase() : "";
+      if (id === "WEATIE") {
+        window.location.href = `${base_url}profile/FUYR7K`;
+        return true;
+      }
+    }
+    return false;
+  };
+
   ipcRenderer.on("url-change", (_, url) => {
     console.log = originalConsole.log;
     console.warn = originalConsole.warn;
     console.error = originalConsole.error;
     console.info = originalConsole.info;
     console.trace = originalConsole.trace;
+    if (checkRedirects(url)) return;
     if (url === `${base_url}`) {
       handleLobby();
       handleInGame();
@@ -1114,6 +1212,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   const handleInitialLoad = () => {
     const url = window.location.href;
+    if (checkRedirects(url)) return;
     if (url === `${base_url}`) {
       handleLobby();
       handleInGame();

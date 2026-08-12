@@ -30,7 +30,7 @@ class Menu {
   createMenu() {
     const menu = document.createElement("div");
     menu.innerHTML = this.menuHTML;
-    menu.id = "juice-menu";
+    menu.id = "kirkaxpert-menu";
     menu.style.cssText =
       "z-index: 99999999; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);";
 	const menuCSS = document.createElement("style");
@@ -54,13 +54,13 @@ class Menu {
     this.handleDropdowns();
     this.handleSearch();
     this.handleButtons();
-    this.localStorage.getItem("juice-menu-tab")
+    this.localStorage.getItem("kirkaxpert-menu-tab")
       ? this.handleTabChange(
           this.menu.querySelector(
-            `[data-tab="${this.localStorage.getItem("juice-menu-tab")}"]`
+            `[data-tab="${this.localStorage.getItem("kirkaxpert-menu-tab")}"]`
           )
         )
-      : this.handleTabChange(this.menu.querySelector(".juice.tab"));
+      : this.handleTabChange(this.menu.querySelector(".kirkaxpert.tab"));
   }
 
   setVersion() {
@@ -80,15 +80,15 @@ class Menu {
     this.menu.querySelector(
       ".keybind"
     ).innerText = `Press ${this.settings.menu_keybind} to toggle menu`;
-    if (!this.localStorage.getItem("juice-menu")) {
+    if (!this.localStorage.getItem("kirkaxpert-menu")) {
       this.localStorage.setItem(
-        "juice-menu",
+        "kirkaxpert-menu",
         this.menuToggle.getAttribute("data-active")
       );
     } else {
       this.menuToggle.setAttribute(
         "data-active",
-        this.localStorage.getItem("juice-menu")
+        this.localStorage.getItem("kirkaxpert-menu")
       );
     }
   }
@@ -107,7 +107,7 @@ class Menu {
           document.exitPointerLock();
         }
         this.menuToggle.setAttribute("data-active", !isActive);
-        this.localStorage.setItem("juice-menu", !isActive);
+        this.localStorage.setItem("kirkaxpert-menu", !isActive);
       }
     });
   }
@@ -150,7 +150,7 @@ class Menu {
         changeKeybindButton.innerText = e.code;
         ipcRenderer.send("update-setting", "menu_keybind", e.code);
 
-        const event = new CustomEvent("juice-settings-changed", {
+        const event = new CustomEvent("kirkaxpert-settings-changed", {
           detail: { setting: "menu_keybind", value: e.code },
         });
         document.dispatchEvent(event);
@@ -170,7 +170,7 @@ class Menu {
     const value = type === "checkbox" ? input.checked : input.value;
     this.settings[setting] = value;
     ipcRenderer.send("update-setting", setting, value);
-    const event = new CustomEvent("juice-settings-changed", {
+    const event = new CustomEvent("kirkaxpert-settings-changed", {
       detail: { setting: setting, value: value },
     });
     document.dispatchEvent(event);
@@ -195,7 +195,7 @@ class Menu {
     const value = select.value;
     this.settings[setting] = value;
     ipcRenderer.send("update-setting", setting, value);
-    const event = new CustomEvent("juice-settings-changed", {
+    const event = new CustomEvent("kirkaxpert-settings-changed", {
       detail: { setting: setting, value: value },
     });
     if (setting === "menu_theme") {
@@ -214,19 +214,19 @@ class Menu {
   }
 
   handleTabChanges() {
-    const tabs = this.menu.querySelectorAll(".juice.tab");
+    const tabs = this.menu.querySelectorAll(".kirkaxpert.tab");
     tabs.forEach((tab) => {
       tab.addEventListener("click", () => this.handleTabChange(tab));
     });
   }
 
   handleTabChange(tab) {
-    const tabs = this.menu.querySelectorAll(".juice.tab");
+    const tabs = this.menu.querySelectorAll(".kirkaxpert.tab");
     const tabName = tab.dataset.tab;
 
-    this.localStorage.setItem("juice-menu-tab", tabName);
+    this.localStorage.setItem("kirkaxpert-menu-tab", tabName);
 
-    const contents = this.menu.querySelectorAll(".juice.options");
+    const contents = this.menu.querySelectorAll(".kirkaxpert.options");
     tabs.forEach((tab) => {
       tab.classList.remove("active");
     });
@@ -248,7 +248,7 @@ class Menu {
   }
 
   handleSearch() {
-    const searchInput = this.menu.querySelector(".juice.search");
+    const searchInput = this.menu.querySelector(".kirkaxpert.search");
     const settings = this.menu.querySelectorAll(".option:not(.custom)");
     searchInput.addEventListener("input", () => {
       const searchValue = searchInput.value.toLowerCase();
@@ -298,7 +298,7 @@ class Menu {
 
       const confirm = document.createElement("button");
       confirm.innerText = "Confirm";
-      confirm.classList.add("juice-button");
+      confirm.classList.add("kirkaxpert-button");
       confirm.addEventListener("click", () => {
         try {
           if (!input.value) return;
@@ -308,7 +308,7 @@ class Menu {
             this.settings[key] = settings[key];
             ipcRenderer.send("update-setting", key, settings[key]);
 
-            const event = new CustomEvent("juice-settings-changed", {
+            const event = new CustomEvent("kirkaxpert-settings-changed", {
               detail: { setting: key, value: settings[key] },
             });
             document.dispatchEvent(event);
@@ -341,7 +341,7 @@ class Menu {
 
       const copy = document.createElement("button");
       copy.innerText = "Copy";
-      copy.classList.add("juice-button");
+      copy.classList.add("kirkaxpert-button");
       copy.addEventListener("click", () => {
         navigator.clipboard.writeText(textarea.value);
       });
@@ -352,19 +352,19 @@ class Menu {
     });
 
     let clickCounter = 0;
-    const resetJuiceSettings = this.menu.querySelector("#reset-juice-settings");
-    resetJuiceSettings.addEventListener("click", () => {
+    const resetKirkaXpertSettings = this.menu.querySelector("#reset-kirkaxpert-settings");
+    resetKirkaXpertSettings.addEventListener("click", () => {
       clickCounter++;
       if (clickCounter === 1) {
-        resetJuiceSettings.style.background = "rgba(var(--red), 0.25)";
-        const text = resetJuiceSettings.querySelector(".text");
+        resetKirkaXpertSettings.style.background = "rgba(var(--red), 0.25)";
+        const text = resetKirkaXpertSettings.querySelector(".text");
         text.innerText = "Are you sure?";
 
-        const description = resetJuiceSettings.querySelector(".description");
+        const description = resetKirkaXpertSettings.querySelector(".description");
         description.innerText =
           "This will restart the client and reset all settings. Click again to confirm";
       } else if (clickCounter === 2) {
-        ipcRenderer.send("reset-juice-settings");
+        ipcRenderer.send("reset-kirkaxpert-settings");
       }
     });
 
@@ -384,7 +384,7 @@ class Menu {
         "SETTINGS___SETTING/SKYBOX___SETTING/TEXTURE_IMG6___SETTING",
       ];
 
-      const juiceKeys = ["css_link", "hitmarker_link", "killicon_link"];
+      const kirkaxpertKeys = ["css_link", "hitmarker_link", "killicon_link"];
 
       const encodeImage = async (url) => {
         if (!url || url === "") return "";
@@ -410,13 +410,13 @@ class Menu {
         localStorage.setItem(key, data);
       }
 
-      for (const key of juiceKeys) {
+      for (const key of kirkaxpertKeys) {
         const url = this.settings[key];
         const data = await encodeImage(url);
         this.settings[key] = data;
         ipcRenderer.send("update-setting", key, data);
 
-        const event = new CustomEvent("juice-settings-changed", {
+        const event = new CustomEvent("kirkaxpert-settings-changed", {
           detail: { setting: key, value: this.settings[key] },
         });
         document.dispatchEvent(event);

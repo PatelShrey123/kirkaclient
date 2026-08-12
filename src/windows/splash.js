@@ -7,8 +7,8 @@ autoUpdater.autoDownload = true;
 
 autoUpdater.setFeedURL({
   provider: "github",
-  owner: "irrvlo",
-  repo: "juice-client",
+  owner: "PatelShrey123",
+  repo: "kirkaclient",
 });
 
 let splashWindow;
@@ -23,7 +23,6 @@ const createWindow = () => {
     transparent: true,
     fullscreenable: false,
     resizable: false,
-    fullscreenable: false,
     webPreferences: {
       preload: path.join(__dirname, "../preload/splash.js"),
     },
