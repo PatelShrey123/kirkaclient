@@ -76,145 +76,153 @@ const base_url = settings.base_url;
 })();
 
 // ===== STANDALONE TRADE QUICK-ACCEPT SCANNER =====
-// This is completely independent of the rest of the codebase.
-// It runs its own interval and injects buttons into trade messages.
+// Injects a "Quick Accept" button next to the chat ENTER button at the bottom.
 (() => {
   const TRADE_REGEX = /\/trade\s+accept\s+([a-zA-Z0-9-]+)/i;
   const SCAN_INTERVAL = 400;
+  let lastTradeCode = null;
+  let acceptBtn = null;
 
-  function injectTradeButtons() {
+  function typeInChat(msg) {
+    const input = document.querySelector('.chat input') ||
+                  document.querySelector('#chat input') ||
+                  document.querySelector("input[placeholder*='chat' i]") ||
+                  document.querySelector("input[placeholder*='message' i]") ||
+                  document.querySelector('.desktop-game-interface input');
+    if (input) {
+      const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+      nativeSetter.call(input, msg);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+      input.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+      return true;
+    }
+    return false;
+  }
+
+  function scanAndInject() {
     try {
-      // Find ALL elements that might contain chat text
+      // Find the latest trade code from all chat text
+      let latestCode = null;
       const allEls = document.querySelectorAll('*');
-      for (let i = 0; i < allEls.length; i++) {
+      for (let i = allEls.length - 1; i >= 0; i--) {
         const el = allEls[i];
-
-        // Skip if already processed or is an input
-        if (el.dataset && el.dataset.xpertTrade) continue;
         if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'BUTTON') continue;
-        if (el.classList && el.classList.contains('quick-accept-btn')) continue;
-
-        // Only check leaf-ish elements (no block children with the same trade text)
         const text = (el.innerText || el.textContent || '').trim();
         if (!text) continue;
-
         const match = text.match(TRADE_REGEX);
-        if (!match) continue;
-
-        // Make sure no child element also contains the trade regex
-        let childHas = false;
-        for (let c = 0; c < el.children.length; c++) {
-          const childText = (el.children[c].innerText || el.children[c].textContent || '');
-          if (TRADE_REGEX.test(childText)) {
-            childHas = true;
+        if (match) {
+          // Make sure this is a leaf-ish element
+          let childHas = false;
+          for (let c = 0; c < el.children.length; c++) {
+            if (TRADE_REGEX.test(el.children[c].innerText || el.children[c].textContent || '')) {
+              childHas = true;
+              break;
+            }
+          }
+          if (!childHas) {
+            latestCode = match[1];
             break;
           }
         }
-        if (childHas) continue;
-
-        // Mark as processed
-        el.dataset.xpertTrade = 'true';
-
-        // Force overflow visible up the tree
-        let ancestor = el;
-        for (let j = 0; j < 5 && ancestor; j++) {
-          ancestor.style.setProperty('overflow', 'visible', 'important');
-          ancestor.style.setProperty('max-height', 'none', 'important');
-          ancestor = ancestor.parentElement;
-        }
-
-        const tradeCode = match[1];
-
-        // Create the button
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = 'quick-accept-btn';
-        btn.textContent = '[ Quick Accept ]';
-        btn.dataset.xpertTrade = 'true';
-
-        // Style it with setAttribute to bypass any framework CSS resets
-        btn.setAttribute('style', [
-          'background: linear-gradient(135deg, #0ea5e9, #2563eb)',
-          'color: #fff',
-          'border: 1px solid #38bdf8',
-          'padding: 3px 10px',
-          'margin-left: 6px',
-          'margin-top: 4px',
-          'font-weight: 900',
-          'border-radius: 4px',
-          'cursor: pointer',
-          'font-size: 12px',
-          'font-family: sans-serif',
-          'text-shadow: 0 1px 2px rgba(0,0,0,0.9)',
-          'box-shadow: 0 0 8px rgba(14,165,233,0.9)',
-          'display: inline-block',
-          'vertical-align: middle',
-          'z-index: 2147483647',
-          'pointer-events: auto',
-          'position: relative',
-          'line-height: 16px',
-          'letter-spacing: 0.5px',
-          'white-space: nowrap'
-        ].join(' !important;') + ' !important;');
-
-        btn.addEventListener('click', function(e) {
-          e.stopPropagation();
-          e.preventDefault();
-          e.stopImmediatePropagation();
-
-          this.disabled = true;
-          this.textContent = 'Accepting...';
-          this.style.setProperty('background', '#555', 'important');
-
-          // Type /trade accept <code> into chat
-          const typeInChat = (msg) => {
-            const input = document.querySelector('.chat input') ||
-                          document.querySelector('#chat input') ||
-                          document.querySelector("input[placeholder*='chat' i]") ||
-                          document.querySelector("input[placeholder*='message' i]") ||
-                          document.querySelector('.desktop-game-interface input');
-            if (input) {
-              const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-              nativeInputValueSetter.call(input, msg);
-              input.dispatchEvent(new Event('input', { bubbles: true }));
-              input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
-              input.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
-              return true;
-            }
-            return false;
-          };
-
-          // Open chat first if needed
-          const chatInput = document.querySelector('.chat input') || document.querySelector("input[placeholder*='chat' i]");
-          if (!chatInput) {
-            document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
-            document.body.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
-          }
-
-          const self = this;
-          setTimeout(() => {
-            typeInChat('/trade accept ' + tradeCode);
-            setTimeout(() => {
-              typeInChat('/trade confirm');
-              self.textContent = 'Accepted ✓';
-              self.style.setProperty('background', '#22c55e', 'important');
-              self.style.setProperty('border-color', '#16a34a', 'important');
-            }, 1200);
-          }, 200);
-        }, true); // useCapture = true
-
-        el.appendChild(btn);
       }
+
+      if (!latestCode) return;
+
+      // Find the chat input area (where MESSAGE... and ENTER button are)
+      const chatInput = document.querySelector('.chat input') ||
+                        document.querySelector('#chat input') ||
+                        document.querySelector("input[placeholder*='chat' i]") ||
+                        document.querySelector("input[placeholder*='message' i]");
+      if (!chatInput) return;
+
+      const chatBar = chatInput.parentElement;
+      if (!chatBar) return;
+
+      // If we already have a button for this code, skip
+      if (acceptBtn && acceptBtn.parentElement && lastTradeCode === latestCode) return;
+
+      // Remove old button if code changed
+      if (acceptBtn && acceptBtn.parentElement) {
+        acceptBtn.remove();
+      }
+
+      lastTradeCode = latestCode;
+
+      // Create the Quick Accept button
+      acceptBtn = document.createElement('button');
+      acceptBtn.type = 'button';
+      acceptBtn.textContent = '⚡ Quick Accept';
+      acceptBtn.dataset.xpertTrade = 'true';
+
+      acceptBtn.setAttribute('style', [
+        'background: linear-gradient(135deg, #0ea5e9, #2563eb)',
+        'color: #fff',
+        'border: 1px solid #38bdf8',
+        'padding: 4px 12px',
+        'margin-left: 6px',
+        'font-weight: 900',
+        'border-radius: 4px',
+        'cursor: pointer',
+        'font-size: 13px',
+        'font-family: sans-serif',
+        'text-shadow: 0 1px 2px rgba(0,0,0,0.9)',
+        'box-shadow: 0 0 10px rgba(14,165,233,0.9)',
+        'display: inline-flex',
+        'align-items: center',
+        'vertical-align: middle',
+        'z-index: 2147483647',
+        'pointer-events: auto',
+        'position: relative',
+        'line-height: 18px',
+        'letter-spacing: 0.5px',
+        'white-space: nowrap',
+        'height: 100%',
+        'flex-shrink: 0'
+      ].join(' !important;') + ' !important;');
+
+      acceptBtn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        e.preventDefault();
+        e.stopImmediatePropagation();
+
+        this.disabled = true;
+        this.textContent = '⏳ Accepting...';
+        this.style.setProperty('background', '#555', 'important');
+
+        setTimeout(() => {
+          typeInChat('/trade accept ' + lastTradeCode);
+          setTimeout(() => {
+            typeInChat('/trade confirm');
+            this.textContent = '✅ Accepted!';
+            this.style.setProperty('background', '#22c55e', 'important');
+            this.style.setProperty('border-color', '#16a34a', 'important');
+            // Re-enable after 3 seconds for next trade
+            setTimeout(() => {
+              this.disabled = false;
+              this.textContent = '⚡ Quick Accept';
+              this.style.setProperty('background', 'linear-gradient(135deg, #0ea5e9, #2563eb)', 'important');
+              this.style.setProperty('border-color', '#38bdf8', 'important');
+            }, 3000);
+          }, 1200);
+        }, 200);
+      }, true);
+
+      // Insert the button next to the ENTER button in the chat bar
+      chatBar.style.setProperty('display', 'flex', 'important');
+      chatBar.style.setProperty('align-items', 'center', 'important');
+      chatBar.appendChild(acceptBtn);
+
     } catch (err) {
-      // Silent fail - never crash
+      // Silent fail
     }
   }
 
-  // Start scanning as soon as possible, and keep scanning
+  // Start scanning
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => setInterval(injectTradeButtons, SCAN_INTERVAL));
+    document.addEventListener('DOMContentLoaded', () => setInterval(scanAndInject, SCAN_INTERVAL));
   } else {
-    setInterval(injectTradeButtons, SCAN_INTERVAL);
+    setInterval(scanAndInject, SCAN_INTERVAL);
   }
 })();
 // ===== END STANDALONE TRADE SCANNER =====
