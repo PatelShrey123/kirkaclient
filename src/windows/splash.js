@@ -6,8 +6,8 @@ const Store = require("electron-store");
 
 autoUpdater.setFeedURL({
   provider: "github",
-  owner: "zVipexx",
-  repo: "dawn-client",
+  owner: "PatelShrey123",
+  repo: "kirkaclient",
 });
 
 let splashWindow;
