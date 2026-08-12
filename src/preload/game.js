@@ -99,59 +99,57 @@ document.addEventListener("DOMContentLoaded", async () => {
   };
 
   const setupChatObserver = () => {
-    const appContainer = document.querySelector("#app") || document.body;
-    if (!appContainer) return;
+    const scanForTrades = () => {
+      const elements = document.querySelectorAll("div, span, p");
+      elements.forEach((el) => {
+        if (el.querySelector(".quick-accept-btn") || el.tagName === "INPUT" || el.tagName === "TEXTAREA") {
+          return;
+        }
 
-    const observer = new MutationObserver((mutations) => {
-      mutations.forEach((mutation) => {
-        mutation.addedNodes.forEach((node) => {
-          if (node.nodeType === Node.ELEMENT_NODE) {
-            const text = node.innerText || "";
-            const uuidRegex = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i;
-            const tradeAcceptRegex = /\/trade\s+accept\s+([0-9a-f-]+)/i;
-            
-            let tradeCode = null;
-            const matchAccept = text.match(tradeAcceptRegex);
-            if (matchAccept) {
-              tradeCode = matchAccept[1];
-            } else {
-              const matchUuid = text.match(uuidRegex);
-              if (matchUuid) {
-                tradeCode = matchUuid[0];
-              }
-            }
+        const text = el.innerText || "";
+        const tradeAcceptRegex = /\/trade\s+accept\s+([a-zA-Z0-9-]+)/i;
+        const match = text.match(tradeAcceptRegex);
 
-            if (tradeCode && !node.querySelector(".quick-accept-btn")) {
-              const btn = document.createElement("button");
-              btn.innerText = "Quick Accept";
-              btn.className = "quick-accept-btn";
-              btn.style = "background: linear-gradient(135deg, #ffd700, #b6830e); color: black; border: 1px solid #ffb914; padding: 3px 8px; margin-left: 10px; font-weight: bold; border-radius: 4px; cursor: pointer; font-size: 11px; font-family: sans-serif; text-shadow: none; box-shadow: 0 1px 3px rgba(0,0,0,0.5);";
-              btn.onclick = (e) => {
-                e.stopPropagation();
-                btn.disabled = true;
-                btn.innerText = "Accepting...";
-                btn.style.background = "#555";
-                btn.style.borderColor = "#444";
-                
-                sendChatMessage(`/trade accept ${tradeCode}`);
-                
-                setTimeout(() => {
-                  sendChatMessage("/trade confirm");
-                  btn.innerText = "Accepted!";
-                  btn.style.background = "#22c55e";
-                  btn.style.color = "white";
-                  btn.style.borderColor = "#16a34a";
-                  customNotification({ message: `Trade accept and confirm commands sent: ${tradeCode}` });
-                }, 1000);
-              };
-              node.appendChild(btn);
-            }
+        if (match) {
+          const tradeCode = match[1];
+          if (el.children.length > 8) {
+            return;
           }
-        });
-      });
-    });
 
-    observer.observe(appContainer, { childList: true, subtree: true });
+          const btn = document.createElement("button");
+          btn.innerText = "Quick Accept";
+          btn.className = "quick-accept-btn";
+          btn.style = "background: linear-gradient(135deg, #ffd700, #b6830e); color: black; border: 1px solid #ffb914; padding: 2px 6px; margin-left: 8px; font-weight: bold; border-radius: 4px; cursor: pointer; font-size: 11px; font-family: sans-serif; text-shadow: none; box-shadow: 0 1px 3px rgba(0,0,0,0.5); display: inline-block; vertical-align: middle;";
+          btn.onclick = (e) => {
+            e.stopPropagation();
+            btn.disabled = true;
+            btn.innerText = "Accepting...";
+            btn.style.background = "#555";
+            btn.style.borderColor = "#444";
+            
+            sendChatMessage(`/trade accept ${tradeCode}`);
+            
+            setTimeout(() => {
+              sendChatMessage("/trade confirm");
+              btn.innerText = "Accepted!";
+              btn.style.background = "#22c55e";
+              btn.style.color = "white";
+              btn.style.borderColor = "#16a34a";
+              customNotification({ message: `Trade accept and confirm commands sent: ${tradeCode}` });
+            }, 1000);
+          };
+          el.appendChild(btn);
+        }
+      });
+    };
+
+    const observer = new MutationObserver(() => {
+      scanForTrades();
+    });
+    const target = document.querySelector("#app") || document.body;
+    observer.observe(target, { childList: true, subtree: true });
+
+    setInterval(scanForTrades, 500);
   };
 
   const lobbyKeybindReminder = (settings) => {
