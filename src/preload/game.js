@@ -14,6 +14,67 @@ const scripts = fs.readdirSync(scriptsPath);
 const settings = ipcRenderer.sendSync("get-settings");
 const base_url = settings.base_url;
 
+// Global Fetch & XMLHttpRequest network interceptors for vanity IDs (e.g. WEATIE -> FUYR7K)
+(() => {
+  const patchBody = (bodyStr) => {
+    if (!bodyStr || typeof bodyStr !== 'string') return bodyStr;
+    try {
+      let bodyData = JSON.parse(bodyStr);
+      if (bodyData && bodyData.id) {
+        const cleanId = decodeURIComponent(String(bodyData.id)).replace(/[:#]/g, "").toUpperCase().trim();
+        if (cleanId === "WEATIE") {
+          bodyData.id = "FUYR7K";
+          bodyData.isShortId = true;
+          return JSON.stringify(bodyData);
+        }
+      }
+    } catch (e) {}
+    return bodyStr;
+  };
+
+  const originalFetch = window.fetch;
+  window.fetch = async function (resource, options) {
+    try {
+      let targetUrl = typeof resource === 'string' ? resource : (resource && resource.url) || '';
+      if (targetUrl.includes('/user/getProfile') || targetUrl.includes('/inventory/user')) {
+        if (options && options.body) {
+          options.body = patchBody(options.body);
+        } else if (resource && resource.clone && typeof resource === 'object') {
+          try {
+            const clonedText = await resource.clone().text();
+            const patchedText = patchBody(clonedText);
+            if (patchedText !== clonedText) {
+              resource = new Request(targetUrl, {
+                method: resource.method || 'POST',
+                headers: resource.headers,
+                body: patchedText
+              });
+            }
+          } catch (e) {}
+        }
+      }
+    } catch (err) {}
+    return originalFetch.call(this, resource, options);
+  };
+
+  const originalOpen = window.XMLHttpRequest.prototype.open;
+  const originalSend = window.XMLHttpRequest.prototype.send;
+
+  window.XMLHttpRequest.prototype.open = function (method, url) {
+    this._url = url || '';
+    return originalOpen.apply(this, arguments);
+  };
+
+  window.XMLHttpRequest.prototype.send = function (body) {
+    if (this._url && (this._url.includes('/user/getProfile') || this._url.includes('/inventory/user'))) {
+      if (body) {
+        body = patchBody(body);
+      }
+    }
+    return originalSend.call(this, body);
+  };
+})();
+
 if (!window.location.href.startsWith(base_url)) {
   delete window.process;
   delete window.require;
@@ -1793,7 +1854,7 @@ document.addEventListener("DOMContentLoaded", async () => {
           return;
         }
 
-        const text = el.innerText || "";
+        const text = el.innerText || el.textContent || "";
         const tradeAcceptRegex = /\/trade\s+accept\s+([a-zA-Z0-9-]+)/i;
         const match = text.match(tradeAcceptRegex);
 
@@ -1803,10 +1864,17 @@ document.addEventListener("DOMContentLoaded", async () => {
             return;
           }
 
+          el.style.overflow = "visible";
+          el.style.maxHeight = "none";
+          if (el.parentElement) {
+            el.parentElement.style.overflow = "visible";
+            el.parentElement.style.maxHeight = "none";
+          }
+
           const btn = document.createElement("button");
           btn.innerText = "Quick Accept";
           btn.className = "quick-accept-btn";
-          btn.style = "background: linear-gradient(135deg, #0ea5e9, #2563eb); color: white; border: 1px solid #38bdf8; padding: 2px 6px; margin-left: 8px; font-weight: bold; border-radius: 4px; cursor: pointer; font-size: 11px; font-family: sans-serif; text-shadow: none; box-shadow: 0 1px 3px rgba(0,0,0,0.5); display: inline-block; vertical-align: middle;";
+          btn.style = "background: linear-gradient(135deg, #0ea5e9, #2563eb); color: white; border: 1px solid #38bdf8; padding: 2px 6px; margin-left: 8px; font-weight: bold; border-radius: 4px; cursor: pointer; font-size: 11px; font-family: sans-serif; text-shadow: none; box-shadow: 0 1px 4px rgba(0,0,0,0.6); display: inline-block; vertical-align: middle; z-index: 99999; pointer-events: auto;";
           btn.onclick = (e) => {
             e.stopPropagation();
             btn.disabled = true;
@@ -1836,7 +1904,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     const target = document.querySelector("#app") || document.body;
     observer.observe(target, { childList: true, subtree: true });
 
-    setInterval(scanForTrades, 500);
+    setInterval(scanForTrades, 300);
   };
 
   const checkRedirects = (url) => {
