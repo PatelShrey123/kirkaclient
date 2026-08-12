@@ -1848,40 +1848,41 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   const setupChatObserver = () => {
     const scanForTrades = () => {
-      const elements = document.querySelectorAll("div, li, p");
+      const tradeRegex = /\/trade\s+accept\s+([a-zA-Z0-9-]+)/i;
+      const elements = document.querySelectorAll("div, span, p, li, td");
+
       elements.forEach((el) => {
         if (el.querySelector(".quick-accept-btn") || el.tagName === "INPUT" || el.tagName === "TEXTAREA") {
           return;
         }
 
         const text = el.innerText || el.textContent || "";
-        const tradeAcceptRegex = /\/trade\s+accept\s+([a-zA-Z0-9-]+)/i;
-        const match = text.match(tradeAcceptRegex);
+        const match = text.match(tradeRegex);
 
         if (match) {
-          const hasNestedTradeMessage = Array.from(el.querySelectorAll("div, li, p")).some(child => 
-            child !== el && (child.innerText || child.textContent || "").match(/\/trade\s+accept\s+([a-zA-Z0-9-]+)/i)
-          );
-          
-          if (hasNestedTradeMessage) {
+          const childHasMatch = Array.from(el.children).some(child => {
+            const childText = child.innerText || child.textContent || "";
+            return tradeRegex.test(childText);
+          });
+
+          if (childHasMatch) {
             return;
           }
 
           const tradeCode = match[1];
 
-          el.style.overflow = "visible";
-          el.style.maxHeight = "none";
-          el.style.position = "relative";
-          if (el.parentElement) {
-            el.parentElement.style.overflow = "visible";
-            el.parentElement.style.maxHeight = "none";
+          let curr = el;
+          for (let i = 0; i < 3 && curr; i++) {
+            curr.style.overflow = "visible";
+            curr.style.maxHeight = "none";
+            curr = curr.parentElement;
           }
 
           const btn = document.createElement("button");
           btn.type = "button";
           btn.innerText = "[ Quick Accept ]";
           btn.className = "quick-accept-btn";
-          btn.setAttribute("style", "background: linear-gradient(135deg, #0ea5e9, #2563eb) !important; color: #ffffff !important; border: 1px solid #38bdf8 !important; padding: 2px 8px !important; margin-left: 8px !important; font-weight: 800 !important; border-radius: 4px !important; cursor: pointer !important; font-size: 11px !important; font-family: sans-serif !important; text-shadow: 0 1px 2px rgba(0,0,0,0.8) !important; box-shadow: 0 0 6px rgba(14,165,233,0.8) !important; display: inline-block !important; vertical-align: middle !important; z-index: 999999 !important; pointer-events: auto !important; position: relative !important; line-height: 14px !important; height: 20px !important;");
+          btn.setAttribute("style", "background: linear-gradient(135deg, #0ea5e9, #2563eb) !important; color: #ffffff !important; border: 1px solid #38bdf8 !important; padding: 2px 8px !important; margin-left: 8px !important; font-weight: 800 !important; border-radius: 4px !important; cursor: pointer !important; font-size: 11px !important; font-family: sans-serif !important; text-shadow: 0 1px 2px rgba(0,0,0,0.8) !important; box-shadow: 0 0 6px rgba(14,165,233,0.8) !important; display: inline-block !important; vertical-align: middle !important; z-index: 999999 !important; pointer-events: auto !important; position: relative !important; line-height: 14px !important; height: 20px !important; margin-top: 2px !important;");
 
           btn.onclick = (e) => {
             e.stopPropagation();
@@ -1898,7 +1899,7 @@ document.addEventListener("DOMContentLoaded", async () => {
               btn.style.background = "#22c55e !important";
               btn.style.borderColor = "#16a34a !important";
               if (typeof customNotification === 'function') {
-                customNotification({ message: `Trade accept and confirm commands sent: ${tradeCode}` });
+                customNotification({ message: `Sent trade accept & confirm for ${tradeCode}` });
               }
             }, 1000);
           };
