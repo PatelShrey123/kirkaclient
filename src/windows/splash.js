@@ -1,8 +1,11 @@
 const { app, BrowserWindow, ipcMain } = require("electron");
 const { autoUpdater } = require("electron-updater");
+const log = require("electron-log");
 const { initGame } = require("./game");
 const path = require("path");
 
+log.transports.file.level = "debug";
+autoUpdater.logger = log;
 autoUpdater.autoDownload = true;
 
 autoUpdater.setFeedURL({
@@ -23,6 +26,7 @@ const createWindow = () => {
     transparent: true,
     fullscreenable: false,
     resizable: false,
+    fullscreenable: false,
     webPreferences: {
       preload: path.join(__dirname, "../preload/splash.js"),
     },
@@ -71,7 +75,7 @@ const handleClose = () =>
       initGame();
       splashWindow.close();
     }
-  }, 2000);
+  }, 5000);
 
 const initSplash = createWindow;
 

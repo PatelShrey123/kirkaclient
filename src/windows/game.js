@@ -1,8 +1,9 @@
-const { BrowserWindow, ipcMain, app, shell } = require("electron");
+const { BrowserWindow, ipcMain, app, shell, dialog } = require("electron");
 const { default_settings, allowed_urls } = require("../util/defaults.json");
 const { registerShortcuts } = require("../util/shortcuts");
 const { applySwitches } = require("../util/switches");
 const DiscordRPC = require("../addons/rpc");
+const { initGameFeatures } = require("../addons/gamefeatures");
 const path = require("path");
 const Store = require("electron-store");
 const fs = require("fs");
@@ -66,10 +67,56 @@ ipcMain.on("open-scripts-folder", () => {
   }
 });
 
-ipcMain.on("reset-kirkaxpert-settings", () => {
+ipcMain.on("open-sounds-folder", () => {
+  const soundsPath = path.join(
+    app.getPath("documents"),
+    "KirkaXpert/swapper/assets/media"
+  );
+
+  if (!fs.existsSync(soundsPath)) {
+    fs.mkdirSync(soundsPath, { recursive: true });
+    shell.openPath(soundsPath);
+  } else {
+    shell.openPath(soundsPath);
+  }
+});
+
+ipcMain.on("open-external", (_, url) => {
+  shell.openExternal(url);
+});
+
+ipcMain.on("reset-juice-settings", () => {
   store.set("settings", default_settings);
   app.relaunch();
   app.quit();
+});
+
+ipcMain.handle("upload-custom-font", async () => {
+  const result = await dialog.showOpenDialog({
+    title: "Select a font file",
+    filters: [{ name: "Fonts", extensions: ["ttf", "otf", "woff", "woff2"] }],
+    properties: ["openFile"],
+  });
+  if (result.canceled || !result.filePaths[0]) return null;
+
+  const sourcePath = result.filePaths[0];
+  const fontsDir = path.join(app.getPath("userData"), "customFonts");
+  if (!fs.existsSync(fontsDir)) {
+    fs.mkdirSync(fontsDir, { recursive: true });
+  }
+
+  const destPath = path.join(fontsDir, path.basename(sourcePath));
+  fs.copyFileSync(sourcePath, destPath);
+  return destPath;
+});
+
+ipcMain.handle("remove-custom-font", async (_e, fontPath) => {
+  if (fontPath && fs.existsSync(fontPath)) {
+    try {
+      fs.unlinkSync(fontPath);
+    } catch {}
+  }
+  return true;
 });
 
 let gameWindow;
@@ -117,22 +164,29 @@ const createWindow = () => {
     if (settings.discord_rpc && gameWindow.DiscordRPC) {
       const base_url = settings.base_url;
       const stateMap = {
-        [`${base_url}`]: "In the lobby",
-        [`${base_url}hub/leaderboard`]: "Viewing the leaderboard",
+        [`${base_url}`]: "In the lobby meow",
+        [`${base_url}hub/leaderboard`]: "Viewing the leaderboard meow",
         [`${base_url}hub/clans/champions-league`]:
           "Viewing the clan leaderboard",
-        [`${base_url}hub/clans/my-clan`]: "Viewing their clan",
-        [`${base_url}hub/market`]: "Viewing the market",
-        [`${base_url}hub/live`]: "Viewing videos",
-        [`${base_url}hub/news`]: "Viewing news",
-        [`${base_url}hub/terms`]: "Viewing the terms of service",
-        [`${base_url}store`]: "Viewing the store",
-        [`${base_url}servers/main`]: "Viewing main servers",
-        [`${base_url}servers/parkour`]: "Viewing parkour servers",
-        [`${base_url}servers/custom`]: "Viewing custom servers",
-        [`${base_url}quests/hourly`]: "Viewing hourly quests",
-        [`${base_url}friends`]: "Viewing friends",
-        [`${base_url}inventory`]: "Viewing their inventory",
+        [`${base_url}hub/clans/my-clan`]: "Viewing their clan meow",
+        [`${base_url}hub/market`]: "Viewing the market meow",
+        [`${base_url}hub/live`]: "Viewing videos meow",
+        [`${base_url}hub/news`]: "Viewing news meow",
+        [`${base_url}hub/terms`]: "Viewing the terms of service meow",
+        [`${base_url}store`]: "Viewing the store meow",
+        [`${base_url}servers/main`]: "Viewing main servers meow",
+        [`${base_url}servers/parkour`]: "Viewing parkour servers meow",
+        [`${base_url}servers/custom`]: "Viewing custom servers meow",
+        [`${base_url}quests/hourly`]: "Viewing hourly quests meow",
+        [`${base_url}friends`]: "Viewing friends meow",
+        [`${base_url}inventory`]: "Viewing their inventory meow",
+        [`https://accounts.google.com/`]: "Logining in (With google)",
+        [`https://www.facebook.com/`]: "Logining in (With facebook)",
+        [`https://appleid.apple.com/`]: "Logining in (With apple)",
+        [`https://www.twitch.tv/login`]: "Logining in (With twitch)",
+        [`https://discord.com/oauth2`]: "Logining in (With Discord)",
+        [`https://id.vk.ru/`]: "Logining in (With vk)",
+        [`${base_url}/profile/NUGGET`]: "Viewing the kirkaxpert client owners Profle",
       };
 
       let state;
@@ -140,14 +194,46 @@ const createWindow = () => {
       if (stateMap[url]) {
         state = stateMap[url];
       } else if (url.startsWith(`${base_url}games/`)) {
-        state = "In a match";
+        state = "In a match meow";
       } else if (url.startsWith(`${base_url}profile/`)) {
-        state = "Viewing a profile";
+        const profileMatch = url.match(`${base_url}profile/(.+)`);
+        if (profileMatch && profileMatch[1]) {
+          const shortId = profileMatch[1];
+          state = `Viewing player profile #${shortId}`;
+          
+          // Set the profile picture as small image with random number to bypass cache
+          const randomNumbers = Math.floor(Math.random() * 1000000);
+          const activity = gameWindow.DiscordRPC.defaultActivity();
+          activity.state = state;
+          activity.smallImageKey = `https://www.kirkaxpert.store/api/list/profile.png?meow=${shortId}&v=${randomNumbers}`;
+          activity.smallImageText = `Viewing ${shortId}'s profile`;
+          gameWindow.DiscordRPC.setActivity(activity);
+        } else {
+          state = "Viewing a profile meow";
+          const activity = gameWindow.DiscordRPC.defaultActivity();
+          activity.state = state;
+          delete activity.smallImageKey;
+          delete activity.smallImageText;
+          gameWindow.DiscordRPC.setActivity(activity);
+        }
       } else {
-        state = "In the lobby";
+        state = "In the lobby meow";
+        const activity = gameWindow.DiscordRPC.defaultActivity();
+        activity.state = state;
+        delete activity.smallImageKey;
+        delete activity.smallImageText;
+        gameWindow.DiscordRPC.setActivity(activity);
       }
 
-      gameWindow.DiscordRPC.setState(state);
+      if (!url.startsWith(`${base_url}profile/`) && !stateMap[url] && !url.startsWith(`${base_url}games/`)) {
+        const activity = gameWindow.DiscordRPC.defaultActivity();
+        activity.state = state;
+        delete activity.smallImageKey;
+        delete activity.smallImageText;
+        gameWindow.DiscordRPC.setActivity(activity);
+      } else if (!url.startsWith(`${base_url}profile/`)) {
+        gameWindow.DiscordRPC.setState(state);
+      }
     }
   });
 
@@ -155,6 +241,7 @@ const createWindow = () => {
   gameWindow.webContents.setUserAgent(
     `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.7103.116 Safari/537.36 Electron/10.4.7 KirkaXpert/${app.getVersion()}`
   );
+  initGameFeatures(gameWindow);
   gameWindow.removeMenu();
   gameWindow.maximize();
 

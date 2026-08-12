@@ -3,7 +3,7 @@ const { version } = require("../../package.json");
 
 class DiscordRPC {
   constructor() {
-    this.clientId = "1233829658345078846";
+    this.clientId = "1415346323930218596";
     this.startTimestamp = Date.now();
     this.client = new rpc.Client({ transport: "ipc" });
     this.init();
@@ -33,12 +33,12 @@ class DiscordRPC {
     return {
       startTimestamp: this.startTimestamp,
       state: "In the lobby",
-      largeImageKey: "kirkaxpert",
+      largeImageKey: "froke",
       largeImageText: `KirkaXpert Client v${version}`,
       instance: false,
       buttons: [
-        { label: "Download", url: "https://kirkaxpert.irrvlo.xyz" },
-        { label: "Discord", url: "https://discord.gg/FjzAAdSjng" },
+        { label: "Download", url: "https://akumaware.one" },
+        { label: "Discord", url: "https://discord.gg/H338BfU4vT" },
       ],
     };
   }

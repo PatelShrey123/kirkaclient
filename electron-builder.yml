@@ -20,3 +20,8 @@ linux:
   category: Game
   icon: "src/assets/img/icon.png"
   artifactName: "${name}-${version}-linux-${arch}.${ext}"
+publish:
+  - provider: github
+    owner: PatelShrey123
+    repo: kirkaclient
+    releaseType: release

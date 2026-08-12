@@ -1,66 +1,18 @@
 const Menu = require("./menu");
 const { opener } = require("../addons/opener");
 const { customReqScripts } = require("../addons/customReqScripts");
+const { initServerPresets } = require("../addons/serverPresets");
 const { ipcRenderer } = require("electron");
 const fs = require("fs");
 const path = require("path");
+
+require("../addons/Custom Skin Link")
 
 const scriptsPath = ipcRenderer.sendSync("get-scripts-path");
 const scripts = fs.readdirSync(scriptsPath);
 
 const settings = ipcRenderer.sendSync("get-settings");
 const base_url = settings.base_url;
-
-// Global Fetch & XMLHttpRequest redirection interceptors for vanity IDs (e.g. WEATIE -> FUYR7K)
-(() => {
-  const originalFetch = window.fetch;
-  window.fetch = async function (resource, options) {
-    let url = typeof resource === 'string' ? resource : (resource && resource.url) || '';
-    if (url.includes('/api/user/getProfile') || url.includes('/api/inventory/user') || url.includes('/user/getProfile') || url.includes('/inventory/user')) {
-      if (options && options.body) {
-        try {
-          let bodyData = JSON.parse(options.body);
-          if (bodyData && bodyData.id) {
-            const cleanId = decodeURIComponent(bodyData.id).replace(/[:#]/g, "").toUpperCase().trim();
-            if (cleanId === "WEATIE") {
-              bodyData.id = "FUYR7K";
-              bodyData.isShortId = true;
-              options.body = JSON.stringify(bodyData);
-            }
-          }
-        } catch (e) {}
-      }
-    }
-    return originalFetch.call(this, resource, options);
-  };
-
-  const originalOpen = window.XMLHttpRequest.prototype.open;
-  const originalSend = window.XMLHttpRequest.prototype.send;
-
-  window.XMLHttpRequest.prototype.open = function (method, url) {
-    this._url = url;
-    return originalOpen.apply(this, arguments);
-  };
-
-  window.XMLHttpRequest.prototype.send = function (body) {
-    if (this._url && (this._url.includes('/api/user/getProfile') || this._url.includes('/api/inventory/user') || this._url.includes('/user/getProfile') || this._url.includes('/inventory/user'))) {
-      if (body) {
-        try {
-          let bodyData = JSON.parse(body);
-          if (bodyData && bodyData.id) {
-            const cleanId = decodeURIComponent(bodyData.id).replace(/[:#]/g, "").toUpperCase().trim();
-            if (cleanId === "WEATIE") {
-              bodyData.id = "FUYR7K";
-              bodyData.isShortId = true;
-              body = JSON.stringify(bodyData);
-            }
-          }
-        } catch (e) {}
-      }
-    }
-    return originalSend.call(this, body);
-  };
-})();
 
 if (!window.location.href.startsWith(base_url)) {
   delete window.process;
@@ -79,6 +31,23 @@ if (!window.location.href.startsWith(base_url)) {
   });
 }
 
+const observeForElement = (selector, functionToRun, target = document.body) => {
+  const observer = new MutationObserver((mutations, obs) => {
+    for (const mutation of mutations) {
+      if (mutation.type === "childList" && mutation.addedNodes.length > 0) {
+        mutation.addedNodes.forEach(node => {
+          if (node.nodeType === Node.ELEMENT_NODE && node.matches(selector)) {
+            functionToRun(node);
+          }
+        });
+      }
+    }
+  });
+
+  observer.observe(target, { childList: true, subtree: true });
+  return observer;
+};
+
 const originalConsole = {
   log: console.log.bind(console),
   warn: console.warn.bind(console),
@@ -87,157 +56,295 @@ const originalConsole = {
   trace: console.trace.bind(console),
 };
 
+{
+  // Create a state object that syncs with settings
+  const weaponState = {
+    _wireframe: settings.weapon_wireframe ?? false,
+    _rainbow: settings.weapon_rainbow ?? false,
+    _solidColor: settings.weapon_solid_color ?? false,
+    _solidColorValue: settings.weapon_solid_color_picker ?? '#ffcc66',
+    _scale: parseFloat(settings.weapon_scale ?? 1.0),
+    _offsetX: parseFloat(settings.weapon_offset_x ?? 0.0),
+    _offsetY: parseFloat(settings.weapon_offset_y ?? 0.0),
+    _offsetZ: parseFloat(settings.weapon_offset_z ?? 0.0),
+
+    get wireframe() { return this._wireframe; },
+    set wireframe(v) { this._wireframe = v; settings.weapon_wireframe = v; },
+    get rainbow() { return this._rainbow; },
+    set rainbow(v) { this._rainbow = v; settings.weapon_rainbow = v; },
+    get solidColor() { return this._solidColor; },
+    set solidColor(v) { this._solidColor = v; settings.weapon_solid_color = v; },
+    get solidColorValue() { return this._solidColorValue; },
+    set solidColorValue(v) { this._solidColorValue = v; settings.weapon_solid_color_picker = v; },
+    get scale() { return this._scale; },
+    set scale(v) { this._scale = v; settings.weapon_scale = v; },
+    get offsetX() { return this._offsetX; },
+    set offsetX(v) { this._offsetX = v; settings.weapon_offset_x = v; },
+    get offsetY() { return this._offsetY; },
+    set offsetY(v) { this._offsetY = v; settings.weapon_offset_y = v; },
+    get offsetZ() { return this._offsetZ; },
+    set offsetZ(v) { this._offsetZ = v; settings.weapon_offset_z = v; }
+  };
+
+  // Update the state when the event fires
+  document.addEventListener("juice-settings-changed", ({ detail }) => {
+    const { setting, value } = detail;
+    if (setting === "weapon_wireframe")  weaponState.wireframe = value;
+    if (setting === "weapon_rainbow")    weaponState.rainbow   = value;
+    if (setting === "weapon_solid_color") weaponState.solidColor = value;
+    if (setting === "weapon_solid_color_picker") weaponState.solidColorValue = value;
+    if (setting === "weapon_scale")      weaponState.scale     = parseFloat(value);
+    if (setting === "weapon_offset_x")   weaponState.offsetX   = parseFloat(value);
+    if (setting === "weapon_offset_y")   weaponState.offsetY   = parseFloat(value);
+    if (setting === "weapon_offset_z")   weaponState.offsetZ   = parseFloat(value);
+  });
+
+  const hookedWeaponCtx = new WeakSet();
+  const weaponScratch   = new Float32Array(16);
+
+  const len3 = (x, y, z) => Math.sqrt(x * x + y * y + z * z);
+
+  const classify = m => {
+    if (!m || m.length < 16) return null;
+    if (Math.abs(m[3]) > 0.001 || Math.abs(m[7]) > 0.001 || Math.abs(m[11]) > 0.001 || Math.abs(m[15] - 1) > 0.001) return null;
+
+    const s0 = len3(m[0], m[1], m[2]);
+    if (s0 < 0.001 || s0 > 15) return null;
+    const s1 = len3(m[4], m[5], m[6]);
+    if (s1 < 0.001 || s1 > 15) return null;
+    const s2 = len3(m[8], m[9], m[10]);
+    if (s2 < 0.001 || s2 > 15) return null;
+
+    const avg = (s0 + s1 + s2) / 3;
+    if (Math.abs(avg - 0.4) < 0.05 || Math.abs(avg - 2.4) < 0.1) return null;
+
+    const dist = len3(m[12], m[13], m[14]);
+    if (dist < 0.001 || dist > 0.6) return null;
+
+    const maxS = Math.max(s0, s1, s2);
+    return (maxS < 1.7 || maxS / Math.min(s0, s1, s2) < 1.05) ? "weapon" : "arms";
+  };
+
+  function updateRainbowPixel(px, h) {
+    const h6 = (h * 6) % 6;
+    const x = (1 - Math.abs(h6 % 2 - 1)) * 255 | 0;
+    if      (h6 < 1) { px[0] = 255; px[1] = x;   px[2] = 0;   }
+    else if (h6 < 2) { px[0] = x;   px[1] = 255; px[2] = 0;   }
+    else if (h6 < 3) { px[0] = 0;   px[1] = 255; px[2] = x;   }
+    else if (h6 < 4) { px[0] = 0;   px[1] = x;   px[2] = 255; }
+    else if (h6 < 5) { px[0] = x;   px[1] = 0;   px[2] = 255; }
+    else             { px[0] = 255; px[1] = 0;   px[2] = x;   }
+    px[3] = 255;
+  }
+
+  const isSpectating = () => !!document.querySelector(".infos .fps");
+
+  const origGetCtx = HTMLCanvasElement.prototype.getContext;
+  HTMLCanvasElement.prototype.getContext = function (type, attrs) {
+    const gl = origGetCtx.call(this, type, attrs);
+    if (!gl || (type !== "webgl" && type !== "webgl2") || hookedWeaponCtx.has(gl)) return gl;
+    hookedWeaponCtx.add(gl);
+
+    const colorTex   = gl.createTexture();
+    const colorPixel  = new Uint8Array([255, 255, 255, 255]);
+    gl.bindTexture(gl.TEXTURE_2D, colorTex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, colorPixel);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+
+    let activeThisFrame   = false;
+    let lastBoundTexture  = null;
+    let lastRainbowUpdate = 0;
+
+    const origUniform      = gl.uniformMatrix4fv;
+    const origBindTexture  = gl.bindTexture;
+    const origTexImage2D   = gl.texImage2D;
+    const origDrawArrays   = gl.drawArrays;
+    const origDrawElements = gl.drawElements;
+
+    const matrixCache = new Float32Array(48);
+    let   cacheCount  = 0;
+    const weaponTrans = new Float32Array(24);
+    let   weaponCount = 0;
+
+    const checkAndCache = s => {
+      const s0 = s[0], s5 = s[5], s10 = s[10], s12 = s[12], s13 = s[13], s14 = s[14];
+      for (let i = 0; i < cacheCount; i++) {
+        const o = i * 6;
+        if (Math.abs(matrixCache[o]   - s0)  < 0.001 &&
+            Math.abs(matrixCache[o+1] - s5)  < 0.001 &&
+            Math.abs(matrixCache[o+2] - s10) < 0.001 &&
+            Math.abs(matrixCache[o+3] - s12) < 0.001 &&
+            Math.abs(matrixCache[o+4] - s13) < 0.001 &&
+            Math.abs(matrixCache[o+5] - s14) < 0.001) return true;
+      }
+      if (cacheCount < 8) {
+        const o = cacheCount * 6;
+        matrixCache[o] = s0; matrixCache[o+1] = s5;  matrixCache[o+2] = s10;
+        matrixCache[o+3] = s12; matrixCache[o+4] = s13; matrixCache[o+5] = s14;
+        cacheCount++;
+      }
+      return false;
+    };
+
+    const isNearWeapon = (tx, ty, tz) => {
+      for (let i = 0; i < weaponCount; i++) {
+        const o = i * 3;
+        const dx = tx - weaponTrans[o], dy = ty - weaponTrans[o+1], dz = tz - weaponTrans[o+2];
+        if (dx * dx + dy * dy + dz * dz < 0.0144) return true;
+      }
+      return false;
+    };
+
+    gl.bindTexture = function (target, texture) {
+      if (target === gl.TEXTURE_2D) lastBoundTexture = texture;
+      return origBindTexture.call(gl, target, texture);
+    };
+
+    gl.uniformMatrix4fv = function (loc, transpose, val, srcOffset, srcLength) {
+      activeThisFrame = false;
+
+      if (!isSpectating() && val && val.length >= 16) {
+        const offset = srcOffset ?? 0;
+        const slice  = (offset === 0 && val.length === 16)
+          ? val
+          : (val.subarray ? val.subarray(offset, offset + 16) : val.slice(offset, offset + 16));
+
+        const kind = classify(slice);
+
+        if (kind === "weapon" || kind === "arms") {
+          if (checkAndCache(slice)) return origUniform.call(gl, loc, transpose, val, srcOffset, srcLength);
+          if (kind === "arms" && isNearWeapon(slice[12], slice[13], slice[14])) return origUniform.call(gl, loc, transpose, val, srcOffset, srcLength);
+
+          activeThisFrame = true;
+
+          // Handle texture overrides
+          if ((weaponState.rainbow || weaponState.solidColor) && lastBoundTexture !== null) {
+            if (weaponState.rainbow) {
+              const now = performance.now();
+              if (now - lastRainbowUpdate > 16) {
+                updateRainbowPixel(colorPixel, (now / 3000) % 1);
+                origBindTexture.call(gl, gl.TEXTURE_2D, colorTex);
+                origTexImage2D.call(gl, gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, colorPixel);
+                lastRainbowUpdate = now;
+              } else {
+                origBindTexture.call(gl, gl.TEXTURE_2D, colorTex);
+              }
+            } else if (weaponState.solidColor) {
+              // Parse hex color to RGB
+              const hex = weaponState.solidColorValue.replace('#', '');
+              const r = parseInt(hex.substring(0, 2), 16);
+              const g = parseInt(hex.substring(2, 4), 16);
+              const b = parseInt(hex.substring(4, 6), 16);
+              const solidColorPixel = new Uint8Array([r, g, b, 255]);
+              origBindTexture.call(gl, gl.TEXTURE_2D, colorTex);
+              origTexImage2D.call(gl, gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, solidColorPixel);
+            }
+          } else if (lastBoundTexture !== null) {
+            origBindTexture.call(gl, gl.TEXTURE_2D, lastBoundTexture);
+          }
+
+          if (kind === "weapon" && weaponCount < 8) {
+            const o = weaponCount * 3;
+            weaponTrans[o] = slice[12]; weaponTrans[o+1] = slice[13]; weaponTrans[o+2] = slice[14];
+            weaponCount++;
+          }
+
+          const s = weaponState.scale;
+          weaponScratch.set(slice);
+          weaponScratch[0]  *= s; weaponScratch[1]  *= s; weaponScratch[2]  *= s;
+          weaponScratch[4]  *= s; weaponScratch[5]  *= s; weaponScratch[6]  *= s;
+          weaponScratch[8]  *= s; weaponScratch[9]  *= s; weaponScratch[10] *= s;
+          weaponScratch[12] += weaponState.offsetX;
+          weaponScratch[13] += weaponState.offsetY;
+          weaponScratch[14] += weaponState.offsetZ;
+
+          return origUniform.call(gl, loc, transpose, weaponScratch, 0, 16);
+        }
+      }
+      return origUniform.call(gl, loc, transpose, val, srcOffset, srcLength);
+    };
+
+    const toWireframe = mode =>
+      (mode === gl.TRIANGLES || mode === gl.TRIANGLE_FAN || mode === gl.TRIANGLE_STRIP) ? gl.LINES : mode;
+
+    const resetFrame = () => { activeThisFrame = false; cacheCount = 0; weaponCount = 0; };
+
+    gl.drawArrays = function (mode, first, count) {
+      if (weaponState.wireframe && activeThisFrame) mode = toWireframe(mode);
+      resetFrame();
+      return origDrawArrays.call(gl, mode, first, count);
+    };
+
+    gl.drawElements = function (mode, count, type, offset) {
+      if (weaponState.wireframe && activeThisFrame) mode = toWireframe(mode);
+      resetFrame();
+      return origDrawElements.call(gl, mode, count, type, offset);
+    };
+
+    return gl;
+  };
+}
+
 document.addEventListener("DOMContentLoaded", async () => {
   console.log = originalConsole.log;
   console.warn = originalConsole.warn;
   console.error = originalConsole.error;
   console.info = originalConsole.info;
   console.trace = originalConsole.trace;
-  
+
   const menu = new Menu();
   menu.init();
 
   opener();
   customReqScripts(settings);
-  setupChatObserver();
 
   const fetchAll = async () => {
-    try {
-      const user = await fetch(`https://api.kirka.io/api/user`, {
+    const [customizations, user] = await Promise.all([
+      fetch("https://raw.githubusercontent.com/OBS-Akuma/KirkaBadges/refs/heads/main/Json/badge.json").then((r) =>
+        r.json()
+      ),
+      fetch(`https://api2.kirka.io/api/wwMWWmnN`, {
         headers: {
           Authorization: `Bearer ${localStorage.getItem("token")}`,
         },
-      }).then((r) => r.json());
+      }).then((r) => r.json()),
+    ]);
 
-      localStorage.setItem(
-        "kirkaxpert-customizations",
-        JSON.stringify([])
-      );
-      localStorage.setItem(
-        "current-user",
-        JSON.stringify(user.statusCode === 401 ? "" : user)
-      );
-    } catch (error) {
-      console.error("Error fetching current user:", error);
-      localStorage.setItem("kirkaxpert-customizations", JSON.stringify([]));
-      localStorage.setItem("current-user", JSON.stringify(""));
-    }
+    localStorage.setItem(
+      "juice-customizations",
+      JSON.stringify(customizations)
+    );
+    localStorage.setItem(
+      "current-user",
+      JSON.stringify(user.statusCode === 401 ? "" : user)
+    );
   };
   fetchAll();
 
   const formatLink = (link) => link.replace(/\\/g, "/");
 
-  const sendChatMessage = (message) => {
-    let chatInput = document.querySelector(".chat input") || 
-                    document.querySelector("#chat input") || 
-                    document.querySelector("input[placeholder*='chat' i]") || 
-                    document.querySelector("input[placeholder*='message' i]") ||
-                    document.querySelector(".desktop-game-interface input");
-                    
-    const pressEnter = (target) => {
-      target.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true }));
-      target.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true }));
-    };
-
-    if (!chatInput) {
-      // Simulate Enter key to open chat box
-      pressEnter(window);
-      pressEnter(document.body);
-    }
-
-    // Wait a brief tick for UI to render
-    setTimeout(() => {
-      chatInput = document.querySelector(".chat input") || 
-                  document.querySelector("#chat input") || 
-                  document.querySelector("input[placeholder*='chat' i]") || 
-                  document.querySelector("input[placeholder*='message' i]") ||
-                  document.querySelector(".desktop-game-interface input") ||
-                  document.querySelector("input");
-
-      if (chatInput) {
-        chatInput.value = message;
-        chatInput.dispatchEvent(new Event('input', { bubbles: true }));
-        pressEnter(chatInput);
-      }
-    }, 50);
-    return true;
-  };
-
-  const setupChatObserver = () => {
-    const scanForTrades = () => {
-      const elements = document.querySelectorAll("div, span, p");
-      elements.forEach((el) => {
-        if (el.querySelector(".quick-accept-btn") || el.tagName === "INPUT" || el.tagName === "TEXTAREA") {
-          return;
-        }
-
-        const text = el.innerText || "";
-        const tradeAcceptRegex = /\/trade\s+accept\s+([a-zA-Z0-9-]+)/i;
-        const match = text.match(tradeAcceptRegex);
-
-        if (match) {
-          const tradeCode = match[1];
-          if (el.children.length > 8) {
-            return;
-          }
-
-          const btn = document.createElement("button");
-          btn.innerText = "Quick Accept";
-          btn.className = "quick-accept-btn";
-          btn.style = "background: linear-gradient(135deg, #ffd700, #b6830e); color: black; border: 1px solid #ffb914; padding: 2px 6px; margin-left: 8px; font-weight: bold; border-radius: 4px; cursor: pointer; font-size: 11px; font-family: sans-serif; text-shadow: none; box-shadow: 0 1px 3px rgba(0,0,0,0.5); display: inline-block; vertical-align: middle;";
-          btn.onclick = (e) => {
-            e.stopPropagation();
-            btn.disabled = true;
-            btn.innerText = "Accepting...";
-            btn.style.background = "#555";
-            btn.style.borderColor = "#444";
-            
-            sendChatMessage(`/trade accept ${tradeCode}`);
-            
-            setTimeout(() => {
-              sendChatMessage("/trade confirm");
-              btn.innerText = "Accepted!";
-              btn.style.background = "#22c55e";
-              btn.style.color = "white";
-              btn.style.borderColor = "#16a34a";
-              customNotification({ message: `Trade accept and confirm commands sent: ${tradeCode}` });
-            }, 1000);
-          };
-          el.appendChild(btn);
-        }
-      });
-    };
-
-    const observer = new MutationObserver(() => {
-      scanForTrades();
-    });
-    const target = document.querySelector("#app") || document.body;
-    observer.observe(target, { childList: true, subtree: true });
-
-    setInterval(scanForTrades, 500);
-  };
-
   const lobbyKeybindReminder = (settings) => {
     const keybindReminder = document.createElement("span");
-    keybindReminder.id = "kirkaxpert-keybind-reminder";
+    keybindReminder.id = "juice-keybind-reminder";
     keybindReminder.style = `position: absolute; left: 147px; bottom: 10px; font-size: 0.9rem; color: #fff; width: max-content`;
 
-    keybindReminder.innerText = `Press ${settings.menu_keybind} to open the client menu.`;
+    keybindReminder.innerText = `Press ${settings.menu_keybind} to open the client menu v${require("../../package.json").version}`;
 
     if (
       !document.querySelector("#app > .interface") ||
-      document.querySelector("#kirkaxpert-keybind-reminder")
+      document.querySelector("#juice-keybind-reminder")
     )
       return;
 
     document.querySelector("#app #left-icons").appendChild(keybindReminder);
-    document.addEventListener("kirkaxpert-settings-changed", ({ detail }) => {
+    document.addEventListener("juice-settings-changed", ({ detail }) => {
       if (detail.setting === "menu_keybind") {
         const keybindReminder = document.querySelector(
-          "#kirkaxpert-keybind-reminder"
+          "#juice-keybind-reminder"
         );
         if (keybindReminder)
-          keybindReminder.innerText = `Press ${detail.value} to open the client menu.`;
+          keybindReminder.innerText = `Press ${detail.value} to open the client menu, Meowww`;
       }
     });
   };
@@ -253,15 +360,10 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (!general_news && !promotional_news && !event_news && !alert_news)
       return;
 
-    let news = [
-      {
-        category: "general",
-        title: "KirkaXpert Client",
-        content: "Welcome to the custom desktop client. Check out the client menu by pressing ShiftRight!",
-        updatedAt: Date.now(),
-        live: true
-      }
-    ];
+    let news = await fetch("https://raw.githubusercontent.com/OBS-Akuma/kirkaxpert-client/refs/heads/main/Api/news.json").then((r) =>
+      r.json()
+    );
+    if (!news.length) return;
 
     news = news.filter(({ category }) => {
       const categories = {
@@ -282,7 +384,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       display: flex;
       flex-direction: column;
       gap: 0.25rem;
-      top: 178px;
+      top: 240px;
       left: 148px;
       pointer-events: auto;
     `;
@@ -399,21 +501,22 @@ document.addEventListener("DOMContentLoaded", async () => {
     news.forEach((newsItem) => createNewsCard(newsItem));
   };
 
-  const kirkaxpertDiscordButton = () => {
+  const juiceDiscordButton = () => {
     const btn = document.querySelectorAll(".card-cont.soc-group")[1];
-    if (!btn || document.querySelector("#kirkaxpert-discord-btn")) return;
+    if (!btn || document.querySelector("#juice-discord-btn")) return;
 
     const discordBtn = btn.cloneNode(true);
-    discordBtn.className =
-      "card-cont soc-group transfer-list-top-enter transfer-list-top-enter-active";
-    discordBtn.id = "kirkaxpert-discord-btn";
+    discordBtn.className = "card-cont soc-group transfer-list-top-enter transfer-list-top-enter-active";
+    discordBtn.id = "juice-discord-btn";
     discordBtn.style = `
-    background: linear-gradient(to top, rgba(255,147,45,.75), rgba(172,250,112,.75)) !important;
-    border-bottom-color: #c47022 !important;
-    border-top-color: #c5ff99 !important;
-    border-right-color: #e48329 !important;`;
+      background: linear-gradient(135deg, #1A8E50 0%, #2aae60 50%, #0e6e3a 100%) !important;
+      border: none !important;
+      box-shadow: 0 4px 15px rgba(26, 142, 80, 0.3) !important;
+      transition: all 0.3s ease !important;
+    `;
+
     const textDivs = discordBtn.querySelector(".text-soc").children;
-    textDivs[0].innerText = "XPERT";
+    textDivs[0].innerText = "KirkaXpert";
     textDivs[1].innerText = "DISCORD";
 
     const i = document.createElement("i");
@@ -422,43 +525,57 @@ document.addEventListener("DOMContentLoaded", async () => {
     i.style.fontFamily = "Font Awesome 6 Brands";
     i.style.margin = "3.2px 1.6px 0 1.6px";
     i.style.textShadow = "0 0 0 transparent";
-    discordBtn.querySelector("svg").replaceWith(i);
+
+    const svgElement = discordBtn.querySelector("svg");
+    if (svgElement) {
+        svgElement.replaceWith(i);
+    }
 
     discordBtn.onclick = () => {
-      window.open("https://discord.gg/FjzAAdSjng", "_blank");
+        window.open("https://discord.gg/H338BfU4vT", "_blank");
     };
 
     btn.replaceWith(discordBtn);
 
     setInterval(() => {
-      discordBtn.className = "card-cont soc-group";
+        if (discordBtn && document.querySelector("#juice-discord-btn")) {
+            discordBtn.className = "card-cont soc-group";
+        }
     }, 300);
   };
 
   const loadTheme = () => {
     const addedStyles = document.createElement("style");
-    addedStyles.id = "kirkaxpert-styles-theme";
+    addedStyles.id = "juice-styles-theme";
     document.head.appendChild(addedStyles);
 
     const customStyles = document.createElement("style");
-    customStyles.id = "kirkaxpert-styles-custom";
+    customStyles.id = "juice-styles-custom";
     document.head.appendChild(customStyles);
 
-    const updateTheme = () => {
+    const updateTheme = async () => {
       const settings = ipcRenderer.sendSync("get-settings");
       const cssLink = settings.css_link;
       const advancedCSS = settings.advanced_css;
 
       if (cssLink && settings.css_enabled) {
-        addedStyles.innerHTML = `@import url('${formatLink(cssLink)}');`;
+        try {
+          const response = await fetch(formatLink(cssLink));
+          if (!response.ok) throw new Error("Network response was not ok");
+          const cssText = await response.text();
+          addedStyles.textContent = cssText;
+        } catch (e) {
+          console.error("Failed to fetch custom CSS:", e);
+          addedStyles.textContent = `@import url('${formatLink(cssLink)}');`;
+        }
       } else {
-        addedStyles.innerHTML = "";
+        addedStyles.textContent = "";
       }
 
       customStyles.innerHTML = advancedCSS;
     };
 
-    document.addEventListener("kirkaxpert-settings-changed", (e) => {
+    document.addEventListener("juice-settings-changed", (e) => {
       if (
         e.detail.setting === "css_link" ||
         e.detail.setting === "css_enabled" ||
@@ -473,7 +590,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   const applyUIFeatures = () => {
     const addedStyles = document.createElement("style");
-    addedStyles.id = "kirkaxpert-styles-ui-features";
+    addedStyles.id = "juice-styles-ui-features";
     document.head.appendChild(addedStyles);
 
     const updateUIFeatures = () => {
@@ -484,16 +601,27 @@ document.addEventListener("DOMContentLoaded", async () => {
         styles.push(
           ".crosshair-static { opacity: 1 !important; visibility: visible !important; display: block !important; }"
         );
+      if (settings.perm_tablist)
+        styles.push(
+          ".tab-info,.tab-team-info {    display: flex !important;    box-shadow: unset !important;    border-radius: 0.5rem !important;    max-width: 30rem !important;    top: 0 !important;    right: 0 !important;    position: fixed;    margin: 0.5rem !important;    padding: 0.15rem !important;}.tab-team-info .players-cont {    flex-direction: column !important;    gap: 0.25rem;}.tab-info .player-list,.tab-team-info .player-list {    margin: unset !important;    gap: 0.25rem;}.tab-info > .head,.tab-team-info > .head,.tab-team-info .player-left-cont > .list {    display: none;}.tab-info .list,.tab-team-info .player-list > .list {    order: 999;}.tab-info .players-wrap,.tab-team-info .players-wrap {    padding: 0.25rem;}.tab-info .player-cont,.tab-team-info .player-cont {    margin: unset;    border-radius: 0.25rem;}.player-left-cont > .player-cont {    border-left: solid 0.5rem #ff4d42;}.player-right-cont > .player-cont {    border-left: solid 0.5rem #0d6dc6;}.kill-bar-cont {    right: 31.5rem !important;    top: 0.5rem !important;}",
+        );
       if (settings.hide_chat)
         styles.push(
           ".desktop-game-interface > #bottom-left > .chat { display: none !important; }"
         );
+      if (settings.hide_kill_text)
+        styles.push(
+          ".ach-cont .text { display: none !important; }"
+        );
       if (settings.hide_interface)
         styles.push(
-          ".desktop-game-interface, .crosshair-cont, .ach-cont, .hitme-cont, .sniper-mwNMW-cont, .team-score, .score { display: none !important; }"
+          ".desktop-game-interface, .ach-cont, .hitme-cont, .sniper-mwNMW-cont, .team-score, .score { display: none !important; }"
         );
       if (settings.skip_loading)
         styles.push(".loading-scene { display: none !important; }");
+      if (settings.chat_height) {
+        styles.push(`.desktop-game-interface #chat { bottom: calc(4.7em + ${settings.chat_height}em * 1.2) !important } .desktop-game-interface #chat .messages { min-height: calc(11.75em + ${settings.chat_height}em) !important }`)
+      }
       if (settings.interface_opacity)
         styles.push(
           `.desktop-game-interface { opacity: ${settings.interface_opacity}% !important; }`
@@ -525,27 +653,43 @@ document.addEventListener("DOMContentLoaded", async () => {
         styles.push(
           "* { transition: none !important; animation: none !important; }"
         );
+        if (settings.lobby_logo_link !== "")
+        styles.push(
+          `.logo { content: url(${formatLink(
+            settings.lobby_logo_link
+          )}) !important; }`
+        );
       if (settings.rave_mode)
         styles.push(
           "canvas { animation: rotateHue 1s linear infinite !important; }"
         );
       if (!settings.lobby_keybind_reminder)
-        styles.push("#kirkaxpert-keybind-reminder { display: none; }");
+        styles.push("#juice-keybind-reminder { display: none; }");
+      if (!settings.spectate_button)
+        styles.push(".spectate-eye { display: none !important; }");
 
       addedStyles.innerHTML = styles.join("");
     };
 
-    document.addEventListener("kirkaxpert-settings-changed", (e) => {
+    document.addEventListener("juice-settings-changed", (e) => {
       const relevantSettings = [
         "perm_crosshair",
+        "perm_tablist",
         "hide_chat",
+        "hide_kill_text",
         "hide_interface",
+        "chat_height",
         "skip_loading",
         "interface_opacity",
         "interface_bounds",
         "hitmarker_link",
+        "killicon_link",
+        "lobby_logo_link",
         "ui_animations",
         "rave_mode",
+        "spectate_button",
+        "show_trade_buttons",
+        "accept_on_click",
         "lobby_keybind_reminder",
       ];
       if (relevantSettings.includes(e.detail.setting)) updateUIFeatures();
@@ -558,17 +702,17 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     lobbyKeybindReminder(settings);
     lobbyNews(settings);
-    kirkaxpertDiscordButton();
+    juiceDiscordButton();
 
     const customizations = JSON.parse(
-      localStorage.getItem("kirkaxpert-customizations")
+      localStorage.getItem("juice-customizations")
     );
     const currentUser = JSON.parse(localStorage.getItem("current-user"));
 
     const applyCustomizations = () => {
-      if (customizations?.find((c) => c.shortId === currentUser?.shortId)) {
+      if (customizations?.find((c) => c.shortId === currentUser?.wMWWm)) {
         const customs = customizations.find(
-          (c) => c.shortId === currentUser.shortId
+          (c) => c.shortId === currentUser.wMWWm
         );
         const lobbyNickname = document.querySelector(
           ".team-section .heads .nickname"
@@ -588,27 +732,27 @@ document.addEventListener("DOMContentLoaded", async () => {
           lobbyNickname.style =
             "display: flex; align-items: flex-end; gap: 0.25rem; overflow: unset !important;";
 
-        if (lobbyNickname.querySelector(".kirkaxpert-badges")) return;
+        if (lobbyNickname.querySelector(".juice-badges")) return;
 
         const badgesElem = document.createElement("div");
         badgesElem.style =
           "display: flex; gap: 0.25rem; align-items: center; width: 0;";
-        badgesElem.className = "kirkaxpert-badges";
+        badgesElem.className = ".juice-badges";
 
         lobbyNickname.appendChild(badgesElem);
 
-        let badgeStyle = "height: 32px; width: auto;";
+        let badgeStyle = "height: 0px; width: auto;";
 
         if (customs.discord) {
           const linkedBadge = document.createElement("img");
-          linkedBadge.src = "https://kirkaxpert.irrvlo.xyz/linked.png";
+          linkedBadge.src = "https://raw.githubusercontent.com/OBS-Akuma/KirkaSkins/refs/heads/main/img/linked.webp";
           linkedBadge.style = badgeStyle;
           badgesElem.appendChild(linkedBadge);
         }
 
         if (customs.booster) {
           const boosterBadge = document.createElement("img");
-          boosterBadge.src = "https://kirkaxpert.irrvlo.xyz/booster.png";
+          boosterBadge.src = "https://raw.githubusercontent.com/OBS-Akuma/KirkaSkins/refs/heads/main/img/booster.webp";
           boosterBadge.style = badgeStyle;
           badgesElem.appendChild(boosterBadge);
         }
@@ -616,7 +760,12 @@ document.addEventListener("DOMContentLoaded", async () => {
         if (customs.badges && customs.badges.length) {
           customs.badges.forEach((badge) => {
             const img = document.createElement("img");
-            img.src = badge;
+            if (badge.startsWith('/') || badge.match(/^[A-Za-z]:\\/)) {
+              const filePath = badge.replace(/\\/g, '/');
+              img.src = `file://${filePath.startsWith('/') ? '' : '/'}${filePath}`;
+            } else {
+              img.src = badge;
+            }
             img.style = badgeStyle;
             badgesElem.appendChild(img);
           });
@@ -630,12 +779,12 @@ document.addEventListener("DOMContentLoaded", async () => {
       );
       lobbyNickname.style =
         "display: flex; align-items: flex-end; gap: 0.25rem;";
-      lobbyNickname.querySelector(".kirkaxpert-badges")?.remove();
+      lobbyNickname.querySelector(".juice-badges")?.remove();
     };
 
     if (settings.customizations) applyCustomizations();
 
-    document.addEventListener("kirkaxpert-settings-changed", ({ detail }) => {
+    document.addEventListener("juice-settings-changed", ({ detail }) => {
       if (detail.setting === "customizations")
         detail.value ? applyCustomizations() : removeCustomizations();
     });
@@ -643,13 +792,13 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   const handleServers = async () => {
     const mapImages = await fetch(
-      "https://raw.githubusercontent.com/SheriffCarry/KirkaSkins/main/maps/full_mapimages.json"
+      "https://raw.githubusercontent.com/OBS-Akuma/imgdata/main/maps/full_mapimages.json"
     ).then((res) => res.json());
 
     Object.keys(mapImages).forEach((item) => {
       if (!mapImages[item].includes("https")) {
         mapImages[item] =
-          "https://raw.githubusercontent.com/SheriffCarry/KirkaSkins/main" +
+          "https://raw.githubusercontent.com/OBS-Akuma/imgdata/main" +
           mapImages[item];
       }
     });
@@ -692,151 +841,131 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   const handleProfile = () => {
     const settings = ipcRenderer.sendSync("get-settings");
+    let disconnectObservers = () => {};
 
-    const interval = setInterval(() => {
-      if (!window.location.href.startsWith(`${base_url}profile/`))
-        clearInterval(interval);
+    const applyCustomizations = () => {
+      const profile = document.querySelector(".tab-content > .profile-cont > .profile");
+      if (!profile) return;
 
-      if (document.querySelector(".profile > .content")) {
-        clearInterval(interval);
+      const userClan = profile.querySelector(".clan-tag")?.textContent.trim();
+      const content = profile.querySelector(".profile > .content");
 
-        const profile = document.querySelector(
-          ".content > .profile-cont > .profile"
-        );
-        const content = profile.querySelector(".profile > .content");
-        const statistics = document.querySelectorAll(".statistic");
-        const progressExp = document.querySelector(".progress-exp");
-
+      if (settings.customizations && userClan) {
+        const shortId = profile.querySelector(".card-profile .copy-cont .value").textContent.trim().split("#")[1];
+        const nickname = profile.querySelector(".nickname");
+        const clan = profile.querySelector(".clan-tag");
+        profile.querySelector(".you").style = "width: 100%";
+        nickname.style.cssText +=
+          "display: flex; align-items: flex-end; gap: 0.25rem; overflow: unset !important;";
         profile.style = "width: unset; min-width: 60rem;";
-        profile.querySelector(".you").style = "width: 100%;";
-        content.style = "width: 36.5rem; flex-shrink: 0;";
+        if (content) content.style = "width: 36.5rem; flex-shrink: 0;";
 
-        if (progressExp) {
-          const [current, max] = progressExp.innerText.split("/");
-          progressExp.innerText = `${parseInt(
-            current
-          ).toLocaleString()}/${parseInt(max).toLocaleString()}`;
+        const textNode = nickname.firstChild;
+        if (textNode && textNode.nodeType === Node.TEXT_NODE) {
+          const span = document.createElement("span");
+          span.className = "nickname-span";
+          span.textContent = textNode.textContent;
+          nickname.replaceChild(span, textNode);
         }
 
-        let kills;
-        let deaths;
+        let badgesElem = nickname.querySelector(".juice-badges");
 
-        statistics.forEach((stat) => {
-          const name = stat.querySelector(".stat-name").innerText;
-          const value = stat.querySelector(".stat-value").innerText;
-
-          if (name === "kills") kills = value;
-          if (name === "deaths") deaths = value;
-
-          if (stat.innerText.includes(".")) return;
-
-          stat.querySelector(".stat-value").innerText = value.replace(
-            value.split(" ")[0],
-            parseInt(value.split(" ")[0]).toLocaleString()
-          );
-        });
-
-        content
-          .querySelectorAll(".top-medium > .top > .card")
-          .forEach((card) => {
-            if (card.classList.contains("progress")) return;
-            card.style.width = "unset";
-            if (card.classList.contains("k-d")) {
-              card.querySelector(".stat-value-kd").innerText = (
-                parseFloat(kills) / parseFloat(deaths)
-              ).toFixed(2)
-            }
-          });
-
-        const shortId = content
-          .querySelector(".card-profile .copy-cont > .value")
-          .innerText.replace("#", "");
-
-        if (settings.customizations) {
-          const nickname = profile.querySelector(".nickname");
-          nickname.style.cssText +=
-            "display: flex; align-items: flex-end; gap: 0.25rem; overflow: unset !important;";
-
-          const textNode = nickname.firstChild;
-          if (textNode && textNode.nodeType === Node.TEXT_NODE) {
-            const span = document.createElement("span");
-            span.className = "nickname-span";
-            span.textContent = textNode.textContent;
-            nickname.replaceChild(span, textNode);
-          }
-
-          const badgesElem = document.createElement("div");
+        if (!badgesElem) {
+          badgesElem = document.createElement("div");
           badgesElem.style =
             "display: flex; gap: 0.25rem; align-items: center;";
-          badgesElem.className = "kirkaxpert-badges";
+          badgesElem.className = "juice-badges";
           nickname.appendChild(badgesElem);
+        } else {
+          badgesElem.innerHTML = "";
+        }
 
-          const customizations = JSON.parse(
-            localStorage.getItem("kirkaxpert-customizations")
-          );
+        const customizations = JSON.parse(
+          localStorage.getItem("juice-customizations")
+        );
 
-          if (customizations?.find((c) => c.shortId === shortId)) {
-            const customs = customizations.find((c) => c.shortId === shortId);
+        if (customizations?.find((c) => c.shortId === shortId)) {
+          const customs = customizations.find((c) => c.shortId === shortId);
 
-            let badgeStyle = "height: 32px; width: auto;";
+          let badgeStyle = "height: 32px; width: auto;";
 
-            if (customs.gradient) {
-              nickname.querySelector(".nickname-span").style.cssText += `
-              background: linear-gradient(${customs.gradient.rot
-                }, ${customs.gradient.stops.join(", ")});
-              -webkit-background-clip: text;
-              -webkit-text-fill-color: transparent;
-              text-shadow: ${customs.gradient.shadow || "0 0 0 transparent"
-                } !important;
-            `;
-            }
+          const span = nickname.querySelector(".nickname-span");
 
-            if (customs.discord) {
-              const linkedBadge = document.createElement("img");
-              linkedBadge.src = "https://kirkaxpert.irrvlo.xyz/linked.png";
-              linkedBadge.style = badgeStyle;
-              badgesElem.appendChild(linkedBadge);
-            }
+          if (customs.gradient) {
+            span.style.display = "inline-block";
+            span.style.background = `linear-gradient(${customs.gradient.rot}, ${customs.gradient.stops.join(", ")})`;
+            span.style.backgroundClip = "text";
+            span.style.webkitBackgroundClip = "text";
+            span.style.color = "transparent";
+            span.style.fontWeight = "700";
+            span.style.textShadow = customs.gradient.shadow || "0 0 0 transparent";
 
-            if (customs.booster) {
-              const boosterBadge = document.createElement("img");
-              boosterBadge.src = "https://kirkaxpert.irrvlo.xyz/booster.png";
-              boosterBadge.style = badgeStyle;
-              badgesElem.appendChild(boosterBadge);
-            }
-
-            if (customs.badges && customs.badges.length) {
-              customs.badges.forEach((badge) => {
-                const img = document.createElement("img");
-                img.src = badge;
-                img.style = badgeStyle;
-                badgesElem.appendChild(img);
-              });
+            if (settings.animations && customs.animated) {
+              span.style.backgroundSize = "200% 200%";
+              span.style.animation = "animated-gradient 3s linear infinite";
             }
           }
-        }
 
-        if (shortId && shortId === "H8N3U4") {
-          const profile = document.querySelector(".profile-cont > .profile");
-          profile.style.position = "relative";
+          if (customs.discord) {
+            const linkedBadge = document.createElement("img");
+            linkedBadge.src = "https://raw.githubusercontent.com/OBS-Akuma/KirkaSkins/refs/heads/main/img/linked.webp";
+            linkedBadge.style = badgeStyle;
+            badgesElem.appendChild(linkedBadge);
+          }
 
-          const div = document.createElement("div");
-          div.style = `
-            position: absolute;
-            bottom: 1rem;
-            left: 1rem;
-            display: inline-flex;
-            align-items: center;
-            gap: 0.5rem;
-          `;
-          div.innerHTML = `
-          <img src="https://kirkaxpert.irrvlo.xyz/bubbles.png" style="height: 0.8rem; width: auto;" />
-          <span style="font-size: 1rem; font-weight: 600; color: #fff;">KirkaXpert Client Developer</span>
-          `;
-          profile.appendChild(div);
+          if (customs.booster) {
+            const boosterBadge = document.createElement("img");
+            boosterBadge.src = "https://raw.githubusercontent.com/OBS-Akuma/KirkaSkins/refs/heads/main/img/booster.webp";
+            boosterBadge.style = badgeStyle;
+            badgesElem.appendChild(boosterBadge);
+          }
+
+          if (customs.badges && customs.badges.length) {
+            customs.badges.forEach((badge) => {
+              const img = document.createElement("img");
+
+              if (badge.startsWith('/') || badge.match(/^[A-Za-z]:\\/)) {
+                const filePath = badge.replace(/\\/g, '/');
+                img.src = `file://${filePath.startsWith('/') ? '' : '/'}${filePath}`;
+              } else {
+                img.src = badge;
+              }
+
+              img.style = badgeStyle;
+              badgesElem.appendChild(img);
+            });
+          }
         }
       }
-    }, 250);
+    };
+
+    let loading = null;
+    let polling = null;
+
+    const run = () => {
+      clearTimeout(loading);
+      clearTimeout(polling);
+
+      loading = setTimeout(() => {
+        const tryApply = () => {
+          const profile = document.querySelector(".tab-content .statistics");
+          if (profile) {
+            applyCustomizations();
+          } else {
+            polling = setTimeout(tryApply, 10);
+          }
+        };
+        tryApply();
+      }, 0);
+    };
+
+    run();
+
+    const obs = observeForElement(".tab-content", run);
+
+    disconnectObservers = () => {
+      obs?.disconnect();
+    };
   };
 
   const handleInGame = () => {
@@ -875,19 +1004,15 @@ document.addEventListener("DOMContentLoaded", async () => {
       deaths.addEventListener("DOMSubtreeModified", updateKD);
     };
 
-    document.addEventListener("kirkaxpert-settings-changed", ({ detail }) => {
+    document.addEventListener("juice-settings-changed", ({ detail }) => {
       if (detail.setting === "kd_indicator") settings.kd_indicator = detail.value;
       else if (detail.setting === "customizations") settings.customizations = detail.value;
     });
 
-    const customizations = JSON.parse(localStorage.getItem("kirkaxpert-customizations"));
+    const customizations = JSON.parse(localStorage.getItem("juice-customizations"));
+    const clancustomizations = JSON.parse(localStorage.getItem("juice-clans"));
 
-    const interval = setInterval(() => {
-      if (!document.querySelector(".desktop-game-interface")) {
-        clearInterval(interval);
-        return;
-      }
-
+    const applyCustomizationsTab = () => {
       const tabplayers = document.querySelectorAll(".desktop-game-interface .player-cont");
 
       if (settings.customizations) {
@@ -897,7 +1022,7 @@ document.addEventListener("DOMContentLoaded", async () => {
           const shortId = player.querySelector(".short-id")?.innerText.replace("#", "");
 
           if (!shortId) {
-            player.querySelector(".kirkaxpert-badges")?.remove();
+            player.querySelector(".juice-badges")?.remove();
             nickname.style = "";
             playerLeft.style = "";
             return;
@@ -906,13 +1031,13 @@ document.addEventListener("DOMContentLoaded", async () => {
           const customs = customizations?.find((c) => c.shortId === shortId);
 
           if (customs) {
-            let badgesElem = player.querySelector(".kirkaxpert-badges");
+            let badgesElem = player.querySelector(".juice-badges");
 
             if (!badgesElem || badgesElem.dataset.shortId !== shortId) {
               badgesElem?.remove();
               badgesElem = document.createElement("div");
               badgesElem.style = "display: flex; gap: 0.25rem; align-items: center; margin-left: 0.25rem;";
-              badgesElem.className = "kirkaxpert-badges";
+              badgesElem.className = "juice-badges";
               badgesElem.dataset.shortId = shortId;
 
               nickname.style = "overflow: unset;";
@@ -925,14 +1050,18 @@ document.addEventListener("DOMContentLoaded", async () => {
             const badgeStyle = "height: 22px; width: auto;";
 
             if (customs.gradient) {
-              nickname.style = `
-                  overflow: unset;
-                  background: linear-gradient(${customs.gradient.rot}, ${customs.gradient.stops.join(", ")}) !important;
-                  -webkit-background-clip: text !important;
-                  -webkit-text-fill-color: transparent !important;
-                  text-shadow: ${customs.gradient.shadow || "0 0 0 transparent"} !important;
-                  font-weight: 700 !important;
-                `;
+              nickname.style.display = "inline-block";
+              nickname.style.background = `linear-gradient(${customs.gradient.rot}, ${customs.gradient.stops.join(", ")})`;
+              nickname.style.backgroundClip = "text";
+              nickname.style.webkitBackgroundClip = "text";
+              nickname.style.color = "transparent";
+              nickname.style.fontWeight = "700";
+              nickname.style.textShadow = customs.gradient.shadow || "0 0 0 transparent";
+
+              if (settings.animations && customs.animated) {
+                nickname.style.backgroundSize = "200% 200%";
+                nickname.style.animation = "animated-gradient 3s linear infinite";
+              }
             } else {
               nickname.style = "overflow: unset;";
             }
@@ -940,31 +1069,177 @@ document.addEventListener("DOMContentLoaded", async () => {
             const addBadge = (src) => {
               if (![...badgesElem.children].some(img => img.src === src)) {
                 const img = document.createElement("img");
-                img.src = src;
+
+                if (src.startsWith('/') || src.match(/^[A-Za-z]:\\/)) {
+                  const filePath = src.replace(/\\/g, '/');
+                  img.src = `file://${filePath.startsWith('/') ? '' : '/'}${filePath}`;
+                } else {
+                  img.src = src;
+                }
+
                 img.style.cssText = badgeStyle;
                 badgesElem.appendChild(img);
               }
             };
 
-            if (customs.discord) addBadge("https://kirkaxpert.irrvlo.xyz/linked.png");
-            if (customs.booster) addBadge("https://kirkaxpert.irrvlo.xyz/booster.png");
+            if (customs.discord) addBadge("https://raw.githubusercontent.com/OBS-Akuma/KirkaSkins/refs/heads/main/img/linked.webp");
+            if (customs.booster) addBadge("https://raw.githubusercontent.com/OBS-Akuma/KirkaSkins/refs/heads/main/img/booster.webp");
 
             if (customs.badges?.length) {
               customs.badges.forEach((badge) => addBadge(badge));
             }
           } else {
-            playerLeft.querySelector(".kirkaxpert-badges")?.remove();
+            playerLeft.querySelector(".juice-badges")?.remove();
             nickname.style = "";
             playerLeft.style = "";
           }
         });
       } else {
         tabplayers.forEach((player) => {
-          player.querySelector(".kirkaxpert-badges")?.remove();
+          player.querySelector(".juice-badges")?.remove();
           player.querySelector(".nickname").style = "";
           player.querySelector(".player-left").style = "";
         });
       }
+    };
+
+    const applyCustomizationsEsc = () => {
+      const escplayers = document.querySelectorAll(".esc-interface .player-cont");
+
+      if (settings.customizations) {
+        escplayers.forEach((player) => {
+          const playerLeft = player.querySelector(".player-left");
+          const playerIds = player.querySelector(".player-name");
+          const nickname = playerIds.querySelector(".nickname");
+          const shortId = nickname.querySelector(".short-id")?.innerText.replace("#", "");
+          const shortIdElem = nickname.querySelector(".short-id");
+
+          if (!shortId) {
+            player.querySelector(".juice-badges")?.remove();
+            nickname.style = "";
+            playerLeft.style = "";
+            return;
+          }
+
+          const customs = customizations?.find((c) => c.shortId === shortId);
+
+          if (customs) {
+            let badgesElem = player.querySelector(".juice-badges");
+
+            if (!badgesElem || badgesElem.dataset.shortId !== shortId) {
+              badgesElem?.remove();
+              badgesElem = document.createElement("div");
+              badgesElem.style = "display: flex; gap: 0.25rem; align-items: center; margin-left: 0.25rem;";
+              badgesElem.className = "juice-badges";
+              badgesElem.dataset.shortId = shortId;
+
+              nickname.style = "overflow: unset;";
+              playerLeft.style = "width: 0;";
+              nickname.insertBefore(badgesElem, shortIdElem);
+            } else {
+              badgesElem.innerHTML = "";
+            }
+
+            const badgeStyle = "height: 22px; width: auto;";
+
+            if (customs.gradient) {
+              nickname.style.display = "flex";
+              nickname.style.flexDirection = "row";
+              nickname.style.background = `linear-gradient(${customs.gradient.rot}, ${customs.gradient.stops.join(", ")})`;
+              nickname.style.backgroundClip = "text";
+              nickname.style.webkitBackgroundClip = "text";
+              nickname.style.color = "transparent";
+              nickname.style.fontWeight = "700";
+              nickname.style.textShadow = customs.gradient.shadow || "0 0 0 transparent";
+
+              shortIdElem.style.background = "none";
+              shortIdElem.style.webkitBackgroundClip = "unset";
+              shortIdElem.style.backgroundClip = "unset";
+              shortIdElem.style.color = "";
+              shortIdElem.style.textShadow = "none";
+
+              if (settings.animations && customs.animated) {
+                nickname.style.backgroundSize = "200% 200%";
+                nickname.style.animation = "animated-gradient 3s linear infinite";
+              }
+            }
+
+            const addBadge = (src) => {
+              if (![...badgesElem.children].some(img => img.src === src)) {
+                const img = document.createElement("img");
+
+                if (src.startsWith('/') || src.match(/^[A-Za-z]:\\/)) {
+                  const filePath = src.replace(/\\/g, '/');
+                  img.src = `file://${filePath.startsWith('/') ? '' : '/'}${filePath}`;
+                } else {
+                  img.src = src;
+                }
+
+                img.style.cssText = badgeStyle;
+                badgesElem.appendChild(img);
+              }
+            };
+
+            if (customs.discord) addBadge("https://raw.githubusercontent.com/OBS-Akuma/KirkaSkins/refs/heads/main/img/linked.webp");
+            if (customs.booster) addBadge("https://raw.githubusercontent.com/OBS-Akuma/KirkaSkins/refs/heads/main/img/booster.webp");
+
+            if (customs.badges?.length) {
+              customs.badges.forEach((badge) => addBadge(badge));
+            }
+          } else {
+            playerLeft.querySelector(".juice-badges")?.remove();
+            nickname.style = "";
+            playerLeft.style = "";
+          }
+        });
+      } else {
+        escplayers.forEach((player) => {
+          player.querySelector(".juice-badges")?.remove();
+          player.querySelector(".nickname").style = "";
+          player.querySelector(".player-left").style = "";
+        });
+      }
+    };
+
+    const observeShortIds = () => {
+      const tabPlayers = document.querySelectorAll(".desktop-game-interface .player-cont");
+
+      tabPlayers.forEach(player => {
+        const shortIdElem = player.querySelector(".short-id");
+        if (!shortIdElem || shortIdElem.dataset.observerAttached) return;
+
+        shortIdElem.dataset.observerAttached = "true";
+
+        new MutationObserver(() => {
+          applyCustomizationsTab();
+        }).observe(shortIdElem, {
+          characterData: true,
+          subtree: true,
+          childList: true
+        });
+      });
+    };
+
+    const interval = setInterval(() => {
+      if (!document.querySelector(".desktop-game-interface")) {
+        clearInterval(interval);
+        return;
+      }
+
+      observeShortIds();
+      applyCustomizationsTab();
+
+      const playerListContainerTab = document.querySelectorAll(".desktop-game-interface .player-list");
+      playerListContainerTab.forEach((playerListContainer) => {
+        if (playerListContainer.dataset.observerAttached) return;
+        playerListContainer.dataset.observerAttached = "true";
+
+        const observerTab = new MutationObserver(() => {
+          observeShortIds();
+          applyCustomizationsTab();
+        });
+        observerTab.observe(playerListContainer, { childList: true, subtree: false });
+      });
 
       if (!document.querySelector(".kill-death .kd") && settings.kd_indicator) {
         createKD();
@@ -972,11 +1247,198 @@ document.addEventListener("DOMContentLoaded", async () => {
         document.querySelector(".kill-death .kd").remove();
       }
     }, 1000);
+
+    observeForElement(".esc-interface", () => {
+      applyCustomizationsEsc();
+    });
   };
 
   const handleFriends = () => {
     const settings = ipcRenderer.sendSync("get-settings");
 
+    // ─── Pin System ────────────────────────────────────────────────────────────
+    let pinnedUsers = new Set();
+    let pinnedUsersList = [];
+
+    const loadPinnedUsers = () => {
+      const saved = localStorage.getItem("friendsList_pinned_v2");
+      if (saved) {
+        try {
+          const parsed = JSON.parse(saved);
+          pinnedUsersList = parsed;
+          pinnedUsers = new Set(parsed);
+        } catch (e) {
+          console.error("Error loading pins:", e);
+        }
+      }
+    };
+
+    const savePinnedUsers = () => {
+      try {
+        localStorage.setItem("friendsList_pinned_v2", JSON.stringify(pinnedUsersList));
+      } catch (e) {
+        console.error("Error saving pins:", e);
+      }
+    };
+
+    const isPinned = (friendId) => pinnedUsers.has(friendId);
+
+    const getPinSvg = (isPinnedFlag) => {
+      if (isPinnedFlag) {
+        return ``;
+      } else {
+        return ``;
+      }
+    };
+
+    const getFriendId = (friendElement) => {
+      const friendIdElem = friendElement.querySelector(".friend-id");
+      return friendIdElem ? friendIdElem.textContent.trim() : null;
+    };
+
+    const sortFriendsList = () => {
+      const listContainer = document.querySelector(".friends .allo .list");
+      if (!listContainer) return;
+
+      const friends = Array.from(listContainer.querySelectorAll(".friend"));
+      if (!friends.length) return;
+
+      const pinnedFriends = friends.filter(f => isPinned(getFriendId(f)));
+      const unpinnedFriends = friends.filter(f => !isPinned(getFriendId(f)));
+      const sorted = [...pinnedFriends, ...unpinnedFriends];
+
+      let needsReorder = sorted.some((f, i) => listContainer.children[i] !== f);
+      if (needsReorder) sorted.forEach(f => listContainer.appendChild(f));
+    };
+
+    const updateAllPinButtons = () => {
+      document.querySelectorAll(".friend-pin-btn").forEach(btn => {
+        const friendId = btn.getAttribute("data-friend-id");
+        if (friendId) btn.innerHTML = getPinSvg(isPinned(friendId));
+      });
+    };
+
+    const togglePin = (friendId) => {
+      if (pinnedUsers.has(friendId)) {
+        pinnedUsers.delete(friendId);
+        const idx = pinnedUsersList.indexOf(friendId);
+        if (idx > -1) pinnedUsersList.splice(idx, 1);
+      } else {
+        pinnedUsers.add(friendId);
+        pinnedUsersList.push(friendId);
+      }
+      savePinnedUsers();
+      sortFriendsList();
+      updateAllPinButtons();
+      return isPinned(friendId);
+    };
+
+    const addPinButton = (friendElement, friendId) => {
+      if (friendElement.querySelector(".friend-pin-btn")) return;
+
+      const friendRight = friendElement.querySelector(".friend-right");
+      if (!friendRight) return;
+
+      const addDelete = friendRight.querySelector(".add-delete");
+      if (!addDelete) return;
+
+      // Skip friend requests (have an ADD button)
+      if (addDelete.querySelector(".add")) return;
+
+      const pinBtn = document.createElement("div");
+      pinBtn.className = "friend-pin-btn";
+      pinBtn.setAttribute("data-friend-id", friendId);
+      pinBtn.style.cssText = `
+      `;
+      pinBtn.innerHTML = getPinSvg(isPinned(friendId));
+
+      pinBtn.addEventListener("mouseenter", () => { pinBtn.style.transform = "scale(1.1)"; });
+      pinBtn.addEventListener("mouseleave", () => { pinBtn.style.transform = "scale(1)"; });
+      pinBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const newState = togglePin(friendId);
+        pinBtn.innerHTML = getPinSvg(newState);
+      });
+
+      const deleteBtn = addDelete.querySelector(".delete");
+      if (deleteBtn) addDelete.insertBefore(pinBtn, deleteBtn);
+    };
+
+    const processFriendsList = () => {
+      const listContainer = document.querySelector(".friends .allo .list");
+      if (!listContainer) return;
+      listContainer.querySelectorAll(".friend").forEach(friend => {
+        const friendId = getFriendId(friend);
+        if (friendId) addPinButton(friend, friendId);
+      });
+      sortFriendsList();
+    };
+
+    // ─── Spectate Buttons credit: Dawn client (trust) ──────────────────────────
+    // NOTE: dedup fixed — was checking classList.contains("") which is always
+    // false, so a fresh eye button got inserted on every tick/mutation. That
+    // fed the friendsMutationObserver below into an infinite loop.
+    const addSpectateButton = (div) => {
+      if (div.nextElementSibling?.classList.contains("friend-spectate-btn")) return;
+
+      const match = div.textContent.match(/\[(.*?)\]/);
+      const code = match ? match[1] : null;
+      if (!code) return;
+
+      const eyeDiv = document.createElement("div");
+      eyeDiv.className = "friend-spectate-btn";
+      eyeDiv.innerHTML = '';
+      eyeDiv.style.cssText = `
+        cursor: pointer;
+        border-radius: .25rem;
+        background: #2f3957;
+        transition: transform .15s ease, background .15s ease;
+      `;
+
+      eyeDiv.addEventListener("mouseenter", () => {
+        eyeDiv.style.background = "#3e4d7c";
+        eyeDiv.style.transform = "scale(1.05)";
+      });
+      eyeDiv.addEventListener("mouseleave", () => {
+        eyeDiv.style.background = "#2f3957";
+        eyeDiv.style.transform = "scale(1)";
+      });
+
+      div.insertAdjacentElement("afterend", eyeDiv);
+
+      eyeDiv.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        const homeBtn = document.querySelector(".home");
+        if (homeBtn) homeBtn.click();
+
+        setTimeout(() => {
+          const joinBtn = document.querySelector(".join-btn");
+          if (joinBtn) joinBtn.click();
+
+          setTimeout(() => {
+            const input = document.querySelector(".input");
+            if (input) {
+              input.value = code;
+              input.dispatchEvent(new Event("input", { bubbles: true }));
+              const modalJoinBtn = document.querySelector(".btn:nth-child(2)");
+              if (modalJoinBtn) modalJoinBtn.click();
+            }
+          }, 500);
+        }, 500);
+      });
+
+      return eyeDiv;
+    };
+
+    const addSpectateButtons = () => {
+      document.querySelectorAll(".online").forEach((div) => {
+        if (div.textContent.trim().toLowerCase().includes("in game")) {
+          addSpectateButton(div);
+        }
+      });
+    };
+
+    // ─── Existing friends logic ────────────────────────────────────────────────
     document.addEventListener("click", (e) => {
       if (e.shiftKey && e.target.classList.contains("online")) {
         const online = e.target;
@@ -990,6 +1452,9 @@ document.addEventListener("DOMContentLoaded", async () => {
         }
       }
     });
+
+    // Load saved pins before the interval starts
+    loadPinnedUsers();
 
     const interval = setInterval(() => {
       if (!window.location.href.startsWith(`${base_url}friends`))
@@ -1007,46 +1472,46 @@ document.addEventListener("DOMContentLoaded", async () => {
       const requestsList = friendsCont.querySelector(".requests");
 
       function createSearch() {
-        const searchFriends = document.createElement("div");
-        searchFriends.className = "search-friends";
-        searchFriends.style = `display: flex; flex-direction: column; align-items: flex-start; margin-top: 1.5rem; padding: 0 1rem;`;
-        searchFriends.innerHTML = `
-          <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: .5rem; width: 100%;">
-            <span class="search-text">Search</span>
-            <span>Press Enter to search</span>
-          </div>
-          <input type="text" placeholder="ENTER USERNAME OR ID" class="search-input" style="border: .125rem solid #202639; outline: none; background: #2f3957; width: 100%; height: 2.875rem; padding-left: .5rem; box-sizing: border-box; font-weight: 600; font-size: 1rem; color: #f2f2f2; box-shadow: 0 1px 2px rgba(0,0,0,.4), inset 0 0 8px rgba(0,0,0,.4); border-radius: .25rem;"/>`;
-        addFriends.appendChild(searchFriends);
+  const searchFriends = document.createElement("div");
+  searchFriends.className = "search-friends";
+  searchFriends.style = `display: flex; flex-direction: column; align-items: flex-start; margin-top: 1.5rem; padding: 0 1rem;`;
+  searchFriends.innerHTML = `
+    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: .5rem; width: 100%;">
+      <span class="search-text">Search</span>
+      <span>Press Enter to search</span>
+    </div>
+    <input type="text" placeholder="Enter username or shortid" class="search-input" style="border: .125rem solid #202639; outline: none; background: #2f3957; width: 100%; height: 2.875rem; padding-left: .5rem; box-sizing: border-box; font-weight: 600; font-size: 1rem; color: #f2f2f2; box-shadow: 0 1px 2px rgba(0,0,0,.4), inset 0 0 8px rgba(0,0,0,.4); border-radius: .25rem;"/>`;
+  const addFriendButton = Array.from(document.querySelectorAll("button.button.btn")).find(
+    (btn) => btn.querySelector(".text")?.innerText.trim() === "ADD FRIEND"
+  );
+  const addFriendContainer = addFriendButton?.closest("div.input");
 
-        searchFriends
-          .querySelector(".search-input")
-          .addEventListener("input", (e) => {
-            const query = e.target.value.toLowerCase();
-            document.querySelectorAll(".friend").forEach((friend) => {
-              const nickname =
-                friend.querySelector(".nickname")?.innerText.toLowerCase() ||
-                "";
-              const shortId =
-                friend.querySelector(".friend-id")?.innerText.toLowerCase() ||
-                "";
-              friend.style.display =
-                nickname.includes(query) || shortId.includes(query)
-                  ? "flex"
-                  : "none";
-            });
-          });
-      }
+  if (addFriendContainer) {
+    addFriendContainer.insertAdjacentElement("afterend", searchFriends);
+  } else {
+    addFriends.appendChild(searchFriends);
+  }
+
+  searchFriends
+    .querySelector(".search-input")
+    .addEventListener("input", (e) => {
+      const query = e.target.value.toLowerCase();
+      document.querySelectorAll(".friend").forEach((friend) => {
+        const nickname =
+          friend.querySelector(".nickname")?.innerText.toLowerCase() || "";
+        const shortId =
+          friend.querySelector(".friend-id")?.innerText.toLowerCase() || "";
+        friend.style.display =
+          nickname.includes(query) || shortId.includes(query) ? "flex" : "none";
+      });
+    });
+}
 
       function createDenyButton() {
         const denyRequests = document.createElement("div");
         denyRequests.className = "deny-requests";
-        denyRequests.style = `display: flex; flex-direction: column; align-items: flex-start; margin-top: 1.5rem; padding: 0 1rem;`;
-        denyRequests.innerHTML = `
-          <span style="margin-bottom: .5rem; font-size: 1rem; font-weight: 600; color: #f2f2f2;">Deny Requests</span>
-          <div style="display: flex; gap: 0.25rem; width: 100%;">
-            <button class="deny-button text-2" style="cursor: pointer; outline: none; padding: 1rem 0; color: white; width: 100%; height: 2.875rem; display: flex; justify-content: center; align-items: center; font-family: Rowdies; font-size: 0.9rem; background: #e73131; border: 4px solid #e73131; border-top: 4px solid #e24f4f; border-bottom: 4px solid #cb1414;">DENY ALL REQUESTS</button>
-            <button class="deny-reset text-2" style="cursor: pointer; outline: none; padding: 1rem 0; color: white; width: 100%; height: 2.875rem; display: none; justify-content: center; align-items: center; font-family: Rowdies; font-size: 0.9rem; background: #ffb914; border: 4px solid #ffb914; border-top: 4px solid #fcd373; border-bottom: 4px solid #b6830e;">BACK</button>
-          </div>`;
+        denyRequests.style = ``;
+        denyRequests.innerHTML = ``;
         addFriends.appendChild(denyRequests);
 
         const denyButton = denyRequests.querySelector(".deny-button");
@@ -1056,7 +1521,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         let denyInterval;
 
         const resetButtonState = () => {
-          denyButton.innerText = "DENY ALL REQUESTS";
+          denyButton.innerText = "i hate my life";
           denyReset.style.display = "none";
           confirm = true;
           updating = false;
@@ -1108,7 +1573,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       if (!addFriends.querySelector(".deny-requests")) createDenyButton();
 
       if (friendsList) {
-        limit.innerText = `${friendsList.children.length}/50`;
+        limit.innerText = `${friendsList.children.length}/250`;
         addFriends.querySelector(".deny-requests").style.display = "none";
       } else if (requestsList) {
         limit.innerText = `${requestsList.children.length} Requests`;
@@ -1119,7 +1584,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       }
 
       const customizations = JSON.parse(
-        localStorage.getItem("kirkaxpert-customizations")
+        localStorage.getItem("juice-customizations")
       );
 
       if (settings.customizations) {
@@ -1153,7 +1618,7 @@ document.addEventListener("DOMContentLoaded", async () => {
               font-weight: 700 !important;
             `;
 
-            let badgesElem = nickname.querySelector(".kirkaxpert-badges");
+            let badgesElem = nickname.querySelector(".juice-badges");
 
             if (!badgesElem || badgesElem.dataset.shortId !== shortId) {
               if (badgesElem) badgesElem.remove();
@@ -1161,7 +1626,7 @@ document.addEventListener("DOMContentLoaded", async () => {
               badgesElem = document.createElement("div");
               badgesElem.style =
                 "display: flex; gap: 0.25rem; align-items: center; width: 0;";
-              badgesElem.className = "kirkaxpert-badges";
+              badgesElem.className = "juice-badges";
               badgesElem.dataset.shortId = shortId;
               nickname.appendChild(badgesElem);
             } else if (badgesElem.dataset.shortId === shortId) return;
@@ -1170,14 +1635,14 @@ document.addEventListener("DOMContentLoaded", async () => {
 
             if (customs.discord) {
               const linkedBadge = document.createElement("img");
-              linkedBadge.src = "https://kirkaxpert.irrvlo.xyz/linked.png";
+              linkedBadge.src = "https://raw.githubusercontent.com/OBS-Akuma/KirkaSkins/refs/heads/main/img/linked.webp";
               linkedBadge.style.cssText = badgeStyle;
               badgesElem.appendChild(linkedBadge);
             }
 
             if (customs.booster) {
               const boosterBadge = document.createElement("img");
-              boosterBadge.src = "https://kirkaxpert.irrvlo.xyz/booster.png";
+              boosterBadge.src = "https://raw.githubusercontent.com/OBS-Akuma/KirkaSkins/refs/heads/main/img/booster.webp";
               boosterBadge.style.cssText = badgeStyle;
               badgesElem.appendChild(boosterBadge);
             }
@@ -1185,14 +1650,59 @@ document.addEventListener("DOMContentLoaded", async () => {
             if (customs.badges && customs.badges.length)
               customs.badges.forEach((badge) => {
                 const img = document.createElement("img");
-                img.src = badge;
+                if (badge.startsWith('/') || badge.match(/^[A-Za-z]:\\/)) {
+                  const filePath = badge.replace(/\\/g, '/');
+                  img.src = `file://${filePath.startsWith('/') ? '' : '/'}${filePath}`;
+                } else {
+                  img.src = badge;
+                }
                 img.style.cssText = badgeStyle;
                 badgesElem.appendChild(img);
               });
           }
         });
       }
+
+      // Process pin buttons and spectate buttons each tick
+      processFriendsList();
+      addSpectateButtons();
     }, 250);
+
+    // ─── Mutation observer ─────────────────────────────────────────────────────
+    // FIX: previously the observer instance was created but never had
+    // .observe() called on it outside the callback, and the DOM writes made
+    // inside the callback (processFriendsList / addSpectateButtons) were
+    // re-triggering it before disconnect() ever ran — infinite loop.
+    // Now: disconnect before mutating, reconnect after, and start it once here.
+    const friendsContainer = document.querySelector(".friends");
+    if (friendsContainer) {
+      const friendsMutationObserver = new MutationObserver(() => {
+        friendsMutationObserver.disconnect();
+        processFriendsList();
+        addSpectateButtons();
+        friendsMutationObserver.observe(friendsContainer, { childList: true, subtree: true });
+      });
+
+      friendsMutationObserver.observe(friendsContainer, { childList: true, subtree: true });
+    }
+
+    // Save pins before the page unloads
+    window.addEventListener("beforeunload", savePinnedUsers);
+
+    // Expose pin system utilities globally for debugging
+    window.pinSystem = {
+      refresh: () => processFriendsList(),
+      getPinned: () => [...pinnedUsersList],
+      clearPinned: () => {
+        pinnedUsers.clear();
+        pinnedUsersList = [];
+        savePinnedUsers();
+        processFriendsList();
+        updateAllPinButtons();
+      },
+      save: () => savePinnedUsers(),
+      load: () => loadPinnedUsers(),
+    };
   };
 
   const customNotification = (data) => {
@@ -1241,12 +1751,98 @@ document.addEventListener("DOMContentLoaded", async () => {
     }, 5000);
   };
 
-  ipcRenderer.on("notification", (_, data) => customNotification(data));
+  const sendChatMessage = (message) => {
+    let chatInput = document.querySelector(".chat input") || 
+                    document.querySelector("#chat input") || 
+                    document.querySelector("input[placeholder*='chat' i]") || 
+                    document.querySelector("input[placeholder*='message' i]") ||
+                    document.querySelector(".desktop-game-interface input");
+                    
+    const pressEnter = (target) => {
+      target.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true }));
+      target.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true }));
+    };
+
+    if (!chatInput) {
+      pressEnter(window);
+      pressEnter(document.body);
+    }
+
+    setTimeout(() => {
+      chatInput = document.querySelector(".chat input") || 
+                  document.querySelector("#chat input") || 
+                  document.querySelector("input[placeholder*='chat' i]") || 
+                  document.querySelector("input[placeholder*='message' i]") ||
+                  document.querySelector(".desktop-game-interface input") ||
+                  document.querySelector("input");
+
+      if (chatInput) {
+        chatInput.value = message;
+        chatInput.dispatchEvent(new Event('input', { bubbles: true }));
+        pressEnter(chatInput);
+      }
+    }, 50);
+    return true;
+  };
+
+  const setupChatObserver = () => {
+    const scanForTrades = () => {
+      const elements = document.querySelectorAll("div, span, p");
+      elements.forEach((el) => {
+        if (el.querySelector(".quick-accept-btn") || el.tagName === "INPUT" || el.tagName === "TEXTAREA") {
+          return;
+        }
+
+        const text = el.innerText || "";
+        const tradeAcceptRegex = /\/trade\s+accept\s+([a-zA-Z0-9-]+)/i;
+        const match = text.match(tradeAcceptRegex);
+
+        if (match) {
+          const tradeCode = match[1];
+          if (el.children.length > 8) {
+            return;
+          }
+
+          const btn = document.createElement("button");
+          btn.innerText = "Quick Accept";
+          btn.className = "quick-accept-btn";
+          btn.style = "background: linear-gradient(135deg, #0ea5e9, #2563eb); color: white; border: 1px solid #38bdf8; padding: 2px 6px; margin-left: 8px; font-weight: bold; border-radius: 4px; cursor: pointer; font-size: 11px; font-family: sans-serif; text-shadow: none; box-shadow: 0 1px 3px rgba(0,0,0,0.5); display: inline-block; vertical-align: middle;";
+          btn.onclick = (e) => {
+            e.stopPropagation();
+            btn.disabled = true;
+            btn.innerText = "Accepting...";
+            btn.style.background = "#555";
+            btn.style.borderColor = "#444";
+            
+            sendChatMessage(`/trade accept ${tradeCode}`);
+            
+            setTimeout(() => {
+              sendChatMessage("/trade confirm");
+              btn.innerText = "Accepted!";
+              btn.style.background = "#22c55e";
+              btn.style.color = "white";
+              btn.style.borderColor = "#16a34a";
+              customNotification({ message: `Trade accept and confirm commands sent: ${tradeCode}` });
+            }, 1000);
+          };
+          el.appendChild(btn);
+        }
+      });
+    };
+
+    const observer = new MutationObserver(() => {
+      scanForTrades();
+    });
+    const target = document.querySelector("#app") || document.body;
+    observer.observe(target, { childList: true, subtree: true });
+
+    setInterval(scanForTrades, 500);
+  };
 
   const checkRedirects = (url) => {
     if (url.includes(`${base_url}profile/`)) {
       const parts = url.split("profile/");
-      const id = parts[1] ? parts[1].replace(/[:#]/g, "").toUpperCase() : "";
+      const id = parts[1] ? decodeURIComponent(parts[1]).replace(/[:#]/g, "").toUpperCase() : "";
       if (id === "WEATIE") {
         window.location.href = `${base_url}profile/FUYR7K`;
         return true;
@@ -1254,6 +1850,8 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
     return false;
   };
+
+  ipcRenderer.on("notification", (_, data) => customNotification(data));
 
   ipcRenderer.on("url-change", (_, url) => {
     console.log = originalConsole.log;
@@ -1269,7 +1867,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (url.startsWith(`${base_url}games`)) handleInGame();
     if (url.startsWith(`${base_url}servers/`)) handleServers();
     if (url.startsWith(`${base_url}profile/`)) handleProfile();
-    if (url === `${base_url}hub/market`) handleMarket();
     if (url === `${base_url}friends`) handleFriends();
   });
 
@@ -1283,11 +1880,12 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (url.startsWith(`${base_url}games`)) handleInGame();
     if (url.startsWith(`${base_url}servers/`)) handleServers();
     if (url.startsWith(`${base_url}profile/`)) handleProfile();
-    if (url === `${base_url}hub/market`) handleMarket();
     if (url === `${base_url}friends`) handleFriends();
 
     loadTheme();
     applyUIFeatures();
+    initServerPresets();
+    setupChatObserver();
   };
 
   handleInitialLoad();
