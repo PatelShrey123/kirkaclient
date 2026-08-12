@@ -1860,7 +1860,12 @@ document.addEventListener("DOMContentLoaded", async () => {
 
         if (match) {
           const tradeCode = match[1];
-          if (el.children.length > 8) {
+          
+          // Check if a child element also contains the trade text, if so, pass down to child
+          const childHasTrade = Array.from(el.children).some(child => 
+            (child.innerText || child.textContent || "").match(/\/trade\s+accept\s+([a-zA-Z0-9-]+)/i)
+          );
+          if (childHasTrade) {
             return;
           }
 
@@ -1872,25 +1877,26 @@ document.addEventListener("DOMContentLoaded", async () => {
           }
 
           const btn = document.createElement("button");
-          btn.innerText = "Quick Accept";
+          btn.innerText = "[ Quick Accept ]";
           btn.className = "quick-accept-btn";
-          btn.style = "background: linear-gradient(135deg, #0ea5e9, #2563eb); color: white; border: 1px solid #38bdf8; padding: 2px 6px; margin-left: 8px; font-weight: bold; border-radius: 4px; cursor: pointer; font-size: 11px; font-family: sans-serif; text-shadow: none; box-shadow: 0 1px 4px rgba(0,0,0,0.6); display: inline-block; vertical-align: middle; z-index: 99999; pointer-events: auto;";
+          btn.style = "background: linear-gradient(135deg, #0ea5e9, #2563eb) !important; color: #ffffff !important; border: 1px solid #38bdf8 !important; padding: 2px 8px !important; margin-left: 8px !important; font-weight: 800 !important; border-radius: 4px !important; cursor: pointer !important; font-size: 11px !important; font-family: sans-serif !important; text-shadow: 0 1px 2px rgba(0,0,0,0.8) !important; box-shadow: 0 0 6px rgba(14,165,233,0.8) !important; display: inline-inline !important; vertical-align: middle !important; z-index: 999999 !important; pointer-events: auto !important; position: relative !important;";
           btn.onclick = (e) => {
             e.stopPropagation();
+            e.preventDefault();
             btn.disabled = true;
             btn.innerText = "Accepting...";
-            btn.style.background = "#555";
-            btn.style.borderColor = "#444";
+            btn.style.background = "#555 !important";
             
             sendChatMessage(`/trade accept ${tradeCode}`);
             
             setTimeout(() => {
               sendChatMessage("/trade confirm");
               btn.innerText = "Accepted!";
-              btn.style.background = "#22c55e";
-              btn.style.color = "white";
-              btn.style.borderColor = "#16a34a";
-              customNotification({ message: `Trade accept and confirm commands sent: ${tradeCode}` });
+              btn.style.background = "#22c55e !important";
+              btn.style.borderColor = "#16a34a !important";
+              if (typeof customNotification === 'function') {
+                customNotification({ message: `Trade accept and confirm commands sent: ${tradeCode}` });
+              }
             }, 1000);
           };
           el.appendChild(btn);
