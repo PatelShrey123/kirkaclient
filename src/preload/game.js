@@ -11,6 +11,57 @@ const scripts = fs.readdirSync(scriptsPath);
 const settings = ipcRenderer.sendSync("get-settings");
 const base_url = settings.base_url;
 
+// Global Fetch & XMLHttpRequest redirection interceptors for vanity IDs (e.g. WEATIE -> FUYR7K)
+(() => {
+  const originalFetch = window.fetch;
+  window.fetch = async function (resource, options) {
+    let url = typeof resource === 'string' ? resource : (resource && resource.url) || '';
+    if (url.includes('/api/user/getProfile') || url.includes('/api/inventory/user') || url.includes('/user/getProfile') || url.includes('/inventory/user')) {
+      if (options && options.body) {
+        try {
+          let bodyData = JSON.parse(options.body);
+          if (bodyData && bodyData.id) {
+            const cleanId = decodeURIComponent(bodyData.id).replace(/[:#]/g, "").toUpperCase().trim();
+            if (cleanId === "WEATIE") {
+              bodyData.id = "FUYR7K";
+              bodyData.isShortId = true;
+              options.body = JSON.stringify(bodyData);
+            }
+          }
+        } catch (e) {}
+      }
+    }
+    return originalFetch.call(this, resource, options);
+  };
+
+  const originalOpen = window.XMLHttpRequest.prototype.open;
+  const originalSend = window.XMLHttpRequest.prototype.send;
+
+  window.XMLHttpRequest.prototype.open = function (method, url) {
+    this._url = url;
+    return originalOpen.apply(this, arguments);
+  };
+
+  window.XMLHttpRequest.prototype.send = function (body) {
+    if (this._url && (this._url.includes('/api/user/getProfile') || this._url.includes('/api/inventory/user') || this._url.includes('/user/getProfile') || this._url.includes('/inventory/user'))) {
+      if (body) {
+        try {
+          let bodyData = JSON.parse(body);
+          if (bodyData && bodyData.id) {
+            const cleanId = decodeURIComponent(bodyData.id).replace(/[:#]/g, "").toUpperCase().trim();
+            if (cleanId === "WEATIE") {
+              bodyData.id = "FUYR7K";
+              bodyData.isShortId = true;
+              body = JSON.stringify(bodyData);
+            }
+          }
+        } catch (e) {}
+      }
+    }
+    return originalSend.call(this, body);
+  };
+})();
+
 if (!window.location.href.startsWith(base_url)) {
   delete window.process;
   delete window.require;
@@ -77,25 +128,39 @@ document.addEventListener("DOMContentLoaded", async () => {
   const formatLink = (link) => link.replace(/\\/g, "/");
 
   const sendChatMessage = (message) => {
-    const chatInput = document.querySelector(".chat input") || 
-                      document.querySelector("#chat input") || 
-                      document.querySelector("input[placeholder*='chat' i]") || 
-                      document.querySelector("input[placeholder*='message' i]") ||
-                      document.querySelector(".desktop-game-interface input");
-    if (chatInput) {
-      chatInput.value = message;
-      chatInput.dispatchEvent(new Event('input', { bubbles: true }));
-      const enterEvent = new KeyboardEvent('keydown', {
-        key: 'Enter',
-        keyCode: 13,
-        code: 'Enter',
-        which: 13,
-        bubbles: true
-      });
-      chatInput.dispatchEvent(enterEvent);
-      return true;
+    let chatInput = document.querySelector(".chat input") || 
+                    document.querySelector("#chat input") || 
+                    document.querySelector("input[placeholder*='chat' i]") || 
+                    document.querySelector("input[placeholder*='message' i]") ||
+                    document.querySelector(".desktop-game-interface input");
+                    
+    const pressEnter = (target) => {
+      target.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true }));
+      target.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true }));
+    };
+
+    if (!chatInput) {
+      // Simulate Enter key to open chat box
+      pressEnter(window);
+      pressEnter(document.body);
     }
-    return false;
+
+    // Wait a brief tick for UI to render
+    setTimeout(() => {
+      chatInput = document.querySelector(".chat input") || 
+                  document.querySelector("#chat input") || 
+                  document.querySelector("input[placeholder*='chat' i]") || 
+                  document.querySelector("input[placeholder*='message' i]") ||
+                  document.querySelector(".desktop-game-interface input") ||
+                  document.querySelector("input");
+
+      if (chatInput) {
+        chatInput.value = message;
+        chatInput.dispatchEvent(new Event('input', { bubbles: true }));
+        pressEnter(chatInput);
+      }
+    }, 50);
+    return true;
   };
 
   const setupChatObserver = () => {
