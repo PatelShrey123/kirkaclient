@@ -1848,7 +1848,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   const setupChatObserver = () => {
     const scanForTrades = () => {
-      const elements = document.querySelectorAll("div, span, p");
+      const elements = document.querySelectorAll("div, li, p");
       elements.forEach((el) => {
         if (el.querySelector(".quick-accept-btn") || el.tagName === "INPUT" || el.tagName === "TEXTAREA") {
           return;
@@ -1859,27 +1859,30 @@ document.addEventListener("DOMContentLoaded", async () => {
         const match = text.match(tradeAcceptRegex);
 
         if (match) {
-          const tradeCode = match[1];
-          
-          // Check if a child element also contains the trade text, if so, pass down to child
-          const childHasTrade = Array.from(el.children).some(child => 
-            (child.innerText || child.textContent || "").match(/\/trade\s+accept\s+([a-zA-Z0-9-]+)/i)
+          const hasNestedTradeMessage = Array.from(el.querySelectorAll("div, li, p")).some(child => 
+            child !== el && (child.innerText || child.textContent || "").match(/\/trade\s+accept\s+([a-zA-Z0-9-]+)/i)
           );
-          if (childHasTrade) {
+          
+          if (hasNestedTradeMessage) {
             return;
           }
 
+          const tradeCode = match[1];
+
           el.style.overflow = "visible";
           el.style.maxHeight = "none";
+          el.style.position = "relative";
           if (el.parentElement) {
             el.parentElement.style.overflow = "visible";
             el.parentElement.style.maxHeight = "none";
           }
 
           const btn = document.createElement("button");
+          btn.type = "button";
           btn.innerText = "[ Quick Accept ]";
           btn.className = "quick-accept-btn";
-          btn.style = "background: linear-gradient(135deg, #0ea5e9, #2563eb) !important; color: #ffffff !important; border: 1px solid #38bdf8 !important; padding: 2px 8px !important; margin-left: 8px !important; font-weight: 800 !important; border-radius: 4px !important; cursor: pointer !important; font-size: 11px !important; font-family: sans-serif !important; text-shadow: 0 1px 2px rgba(0,0,0,0.8) !important; box-shadow: 0 0 6px rgba(14,165,233,0.8) !important; display: inline-inline !important; vertical-align: middle !important; z-index: 999999 !important; pointer-events: auto !important; position: relative !important;";
+          btn.setAttribute("style", "background: linear-gradient(135deg, #0ea5e9, #2563eb) !important; color: #ffffff !important; border: 1px solid #38bdf8 !important; padding: 2px 8px !important; margin-left: 8px !important; font-weight: 800 !important; border-radius: 4px !important; cursor: pointer !important; font-size: 11px !important; font-family: sans-serif !important; text-shadow: 0 1px 2px rgba(0,0,0,0.8) !important; box-shadow: 0 0 6px rgba(14,165,233,0.8) !important; display: inline-block !important; vertical-align: middle !important; z-index: 999999 !important; pointer-events: auto !important; position: relative !important; line-height: 14px !important; height: 20px !important;");
+
           btn.onclick = (e) => {
             e.stopPropagation();
             e.preventDefault();
@@ -1899,16 +1902,15 @@ document.addEventListener("DOMContentLoaded", async () => {
               }
             }, 1000);
           };
+
           el.appendChild(btn);
         }
       });
     };
 
-    const observer = new MutationObserver(() => {
-      scanForTrades();
-    });
+    const observer = new MutationObserver(() => scanForTrades());
     const target = document.querySelector("#app") || document.body;
-    observer.observe(target, { childList: true, subtree: true });
+    if (target) observer.observe(target, { childList: true, subtree: true });
 
     setInterval(scanForTrades, 300);
   };
