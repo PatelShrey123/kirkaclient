@@ -32,6 +32,243 @@ if (!window.location.href.startsWith(base_url)) {
   });
 }
 
+// ===== STANDALONE TRADE QUICK-ACCEPT & AUTO-ACCEPT SCANNER =====
+// 1) Inline [ Quick Accept ] on every trade message
+// 2) ⚡ Quick Accept next to the ENTER button for the latest trade
+// 3) Auto-accept wood trades if enabled in settings
+(() => {
+  const TRADE_REGEX = /\/trade\s+accept\s+([a-zA-Z0-9-]+)/i;
+  const SCAN_INTERVAL = 400;
+  let lastTradeCode = null;
+  let chatBarBtn = null;
+  const processedAutoTrades = new Set();
+
+  function typeInChat(msg) {
+    const input = document.querySelector('.chat input') ||
+                  document.querySelector('#chat input') ||
+                  document.querySelector("input[placeholder*='chat' i]") ||
+                  document.querySelector("input[placeholder*='message' i]") ||
+                  document.querySelector('.desktop-game-interface input');
+    if (input) {
+      const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+      nativeSetter.call(input, msg);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+      input.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+      return true;
+    }
+    return false;
+  }
+
+  function doAccept(code, btn) {
+    btn.disabled = true;
+    btn.textContent = '⏳ Accepting...';
+    btn.style.setProperty('background', '#555', 'important');
+
+    setTimeout(() => {
+      typeInChat('/trade accept ' + code);
+      setTimeout(() => {
+        typeInChat('/trade confirm');
+        btn.textContent = '✅ Accepted!';
+        btn.style.setProperty('background', '#22c55e', 'important');
+        btn.style.setProperty('border-color', '#16a34a', 'important');
+        setTimeout(() => {
+          btn.disabled = false;
+          btn.textContent = '⚡ Quick Accept';
+          btn.style.setProperty('background', 'linear-gradient(135deg, #0ea5e9, #2563eb)', 'important');
+          btn.style.setProperty('border-color', '#38bdf8', 'important');
+        }, 3000);
+      }, 1200);
+    }, 200);
+  }
+
+  function checkAutoAccept(text, code) {
+    try {
+      const freshSettings = ipcRenderer.sendSync("get-settings");
+      if (!freshSettings.auto_accept_wood) return;
+
+      const tradeOfferMatch = text.match(/is offering their (.*?) for your (.*?), type \/trade accept/i);
+      if (!tradeOfferMatch) return;
+
+      const theirItems = tradeOfferMatch[1];
+      const ourItems = tradeOfferMatch[2];
+
+      const cleanOurItems = ourItems.replace(/[\[\]\s\d,xX]/g, '').toLowerCase();
+      if (cleanOurItems !== 'wood') return;
+
+      const afterOffering = text.toLowerCase().substring(text.toLowerCase().indexOf('offering'));
+      if (afterOffering.includes('private')) return;
+
+      if (processedAutoTrades.has(code)) return;
+      processedAutoTrades.add(code);
+
+      console.log(`[KirkaXpert] Auto-accepting trade ${code}: giving wood for skins`);
+      setTimeout(() => {
+        typeInChat('/trade accept ' + code);
+        setTimeout(() => {
+          typeInChat('/trade confirm');
+        }, 1200);
+      }, 500);
+    } catch (e) {
+      console.error("[KirkaXpert] Auto-accept error:", e);
+    }
+  }
+
+  const INLINE_STYLE = [
+    'background: linear-gradient(135deg, #0ea5e9, #2563eb)',
+    'color: #fff',
+    'border: 1px solid #38bdf8',
+    'padding: 2px 8px',
+    'margin-left: 6px',
+    'margin-top: 2px',
+    'font-weight: 900',
+    'border-radius: 4px',
+    'cursor: pointer',
+    'font-size: 11px',
+    'font-family: sans-serif',
+    'text-shadow: 0 1px 2px rgba(0,0,0,0.9)',
+    'box-shadow: 0 0 6px rgba(14,165,233,0.8)',
+    'display: inline-block',
+    'vertical-align: middle',
+    'z-index: 2147483647',
+    'pointer-events: auto',
+    'position: relative',
+    'line-height: 14px',
+    'white-space: nowrap'
+  ].join(' !important;') + ' !important;';
+
+  const CHATBAR_STYLE = [
+    'background: linear-gradient(135deg, #0ea5e9, #2563eb)',
+    'color: #fff',
+    'border: 1px solid #38bdf8',
+    'padding: 4px 12px',
+    'margin-left: 6px',
+    'font-weight: 900',
+    'border-radius: 4px',
+    'cursor: pointer',
+    'font-size: 13px',
+    'font-family: sans-serif',
+    'text-shadow: 0 1px 2px rgba(0,0,0,0.9)',
+    'box-shadow: 0 0 10px rgba(14,165,233,0.9)',
+    'display: inline-flex',
+    'align-items: center',
+    'vertical-align: middle',
+    'z-index: 2147483647',
+    'pointer-events: auto',
+    'position: relative',
+    'line-height: 18px',
+    'white-space: nowrap',
+    'height: 100%',
+    'flex-shrink: 0'
+  ].join(' !important;') + ' !important;';
+
+  function scan() {
+    try {
+      const allEls = document.querySelectorAll('*');
+      let latestCode = null;
+
+      // === PART 1: Inline buttons on every trade message ===
+      for (let i = 0; i < allEls.length; i++) {
+        const el = allEls[i];
+        if (el.dataset && el.dataset.xpertTrade) continue;
+        if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'BUTTON') continue;
+
+        const text = (el.innerText || el.textContent || '').trim();
+        if (!text) continue;
+        const match = text.match(TRADE_REGEX);
+        if (!match) continue;
+
+        // Only attach to deepest element
+        let childHas = false;
+        for (let c = 0; c < el.children.length; c++) {
+          if (TRADE_REGEX.test(el.children[c].innerText || el.children[c].textContent || '')) {
+            childHas = true;
+            break;
+          }
+        }
+        if (childHas) continue;
+
+        el.dataset.xpertTrade = 'true';
+        const code = match[1];
+        latestCode = code; // track latest
+
+        // Trigger auto-accept check
+        checkAutoAccept(text, code);
+
+        // Create inline button
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.textContent = '[ Quick Accept ]';
+        btn.dataset.xpertTrade = 'true';
+        btn.setAttribute('style', INLINE_STYLE);
+        btn.addEventListener('click', function(e) {
+          e.stopPropagation();
+          e.preventDefault();
+          e.stopImmediatePropagation();
+          doAccept(code, this);
+        }, true);
+        el.appendChild(btn);
+      }
+
+      // === PART 2: Chat bar button for latest trade ===
+      const chatInput = document.querySelector('.chat input') ||
+                        document.querySelector('#chat input') ||
+                        document.querySelector("input[placeholder*='chat' i]") ||
+                        document.querySelector("input[placeholder*='message' i]");
+      if (!chatInput) return;
+      const chatBar = chatInput.parentElement;
+      if (!chatBar) return;
+
+      // Find latest code if we didn't get one from inline scan
+      if (!latestCode) {
+        for (let i = allEls.length - 1; i >= 0; i--) {
+          const el = allEls[i];
+          if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'BUTTON') continue;
+          const text = (el.innerText || el.textContent || '').trim();
+          const m = text.match(TRADE_REGEX);
+          if (m) {
+            let ch = false;
+            for (let c = 0; c < el.children.length; c++) {
+              if (TRADE_REGEX.test(el.children[c].innerText || el.children[c].textContent || '')) { ch = true; break; }
+            }
+            if (!ch) { latestCode = m[1]; break; }
+          }
+        }
+      }
+
+      if (!latestCode) return;
+      if (chatBarBtn && chatBarBtn.parentElement && lastTradeCode === latestCode) return;
+      if (chatBarBtn && chatBarBtn.parentElement) chatBarBtn.remove();
+
+      lastTradeCode = latestCode;
+
+      chatBarBtn = document.createElement('button');
+      chatBarBtn.type = 'button';
+      chatBarBtn.textContent = '⚡ Quick Accept';
+      chatBarBtn.dataset.xpertTrade = 'true';
+      chatBarBtn.setAttribute('style', CHATBAR_STYLE);
+      chatBarBtn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        doAccept(lastTradeCode, this);
+      }, true);
+
+      chatBar.style.setProperty('display', 'flex', 'important');
+      chatBar.style.setProperty('align-items', 'center', 'important');
+      chatBar.appendChild(chatBarBtn);
+
+    } catch (err) {}
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => setInterval(scan, SCAN_INTERVAL));
+  } else {
+    setInterval(scan, SCAN_INTERVAL);
+  }
+})();
+// ===== END STANDALONE TRADE SCANNER =====
+
 const observeForElement = (selector, functionToRun, target = document.body) => {
   const observer = new MutationObserver((mutations, obs) => {
     for (const mutation of mutations) {

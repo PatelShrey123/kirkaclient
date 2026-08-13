@@ -60,6 +60,7 @@
     "customizations": true,
     "animations": false,
     "unlimited_fps": false,
+    "auto_accept_wood": false,
     "auto_fullscreen": true,
     "auto_update": true,
     "discord_rpc": true,
