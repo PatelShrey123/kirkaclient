@@ -43,6 +43,18 @@ if (!window.location.href.startsWith(base_url)) {
   let chatBarBtn = null;
   const processedAutoTrades = new Set();
 
+  // Intercept window enter key handlers to stop chat open/close animation
+  window.addEventListener('keydown', (e) => {
+    if (window.isXpertTyping && e.key === 'Enter') {
+      e.stopImmediatePropagation();
+    }
+  }, true);
+  window.addEventListener('keyup', (e) => {
+    if (window.isXpertTyping && e.key === 'Enter') {
+      e.stopImmediatePropagation();
+    }
+  }, true);
+
   function typeInChat(msg) {
     const input = document.querySelector('.chat input') ||
                   document.querySelector('#chat input') ||
@@ -53,8 +65,14 @@ if (!window.location.href.startsWith(base_url)) {
       const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
       nativeSetter.call(input, msg);
       input.dispatchEvent(new Event('input', { bubbles: true }));
-      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
-      input.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+      
+      window.isXpertTyping = true;
+      try {
+        input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+        input.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+      } finally {
+        setTimeout(() => { window.isXpertTyping = false; }, 0);
+      }
       return true;
     }
     return false;
@@ -130,6 +148,18 @@ if (!window.location.href.startsWith(base_url)) {
       console.log("[KirkaXpert Auto-Accept] Cleaned requested:", cleanOurItems);
 
       if (cleanOurItems !== 'wood') {
+        return;
+      }
+
+      // Check quantity: only accept exactly 1 wood
+      let quantity = 1;
+      const qtyMatch = ourItemsText.match(/(?:x|qty|\*)\s*(\d+)/i) || ourItemsText.match(/(\d+)\s*(?:x|qty|\*)/i) || ourItemsText.match(/(\d+)/);
+      if (qtyMatch) {
+        quantity = parseInt(qtyMatch[1], 10);
+      }
+      console.log("[KirkaXpert Auto-Accept] Parsed quantity:", quantity);
+      if (quantity > 1) {
+        console.log("[KirkaXpert Auto-Accept] Quantity is greater than 1. Skipping.");
         return;
       }
 
