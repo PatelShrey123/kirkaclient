@@ -44,6 +44,7 @@ if (!window.location.href.startsWith(base_url)) {
   let chatBarBtn = null;
   const processedAutoTrades = new Set();
   let statusWidget = null;
+  let activeAutoAccept = null;
 
   function updateStatusWidget(status, lastScanned = "None") {
     try {
@@ -79,7 +80,7 @@ if (!window.location.href.startsWith(base_url)) {
       }
 
       statusWidget.innerHTML = `
-        <div style="font-weight: bold; color: #38bdf8; border-bottom: 1px solid rgba(56, 189, 248, 0.3); padding-bottom: 4px; margin-bottom: 4px;">KIRKAXPERT TRADE ENGINE v1.0.6</div>
+        <div style="font-weight: bold; color: #38bdf8; border-bottom: 1px solid rgba(56, 189, 248, 0.3); padding-bottom: 4px; margin-bottom: 4px;">KIRKAXPERT TRADE ENGINE v1.0.7</div>
         <div>Auto-Accept Wood: ${enabledText}</div>
         <div>Last Trade: <span style="color: #e2e8f0; font-size: 10px;">${lastScanned}</span></div>
         <div>Status: <span style="color: #38bdf8;">${status}</span></div>
@@ -131,6 +132,20 @@ if (!window.location.href.startsWith(base_url)) {
     return false;
   }
 
+  function clearChatInput() {
+    const input = document.querySelector('.chat input') ||
+                  document.querySelector('#chat input') ||
+                  document.querySelector("input[placeholder*='chat' i]") ||
+                  document.querySelector("input[placeholder*='message' i]") ||
+                  document.querySelector('.desktop-game-interface input');
+    if (input) {
+      const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+      nativeSetter.call(input, '');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.blur();
+    }
+  }
+
   function doAccept(code, btn) {
     btn.disabled = true;
     btn.textContent = '⏳ Accepting...';
@@ -149,15 +164,16 @@ if (!window.location.href.startsWith(base_url)) {
           btn.style.setProperty('background', 'linear-gradient(135deg, #0ea5e9, #2563eb)', 'important');
           btn.style.setProperty('border-color', '#38bdf8', 'important');
         }, 3000);
-      }, 800);
+      }, 1500); // 1.5 seconds delay between accept and confirm to bypass spam block
     }, 150);
   }
 
-  function showNotification(msg) {
+  function showNotification(msg, isError = false) {
     try {
       const customNotif = window.customNotification || (typeof customNotification !== 'undefined' ? customNotification : null);
       if (customNotif) {
-        customNotif({ message: `<span style="color: #0ea5e9; font-weight: bold;">[KirkaXpert]</span> ${msg}` });
+        const prefixColor = isError ? '#ef4444' : '#0ea5e9';
+        customNotif({ message: `<span style="color: ${prefixColor}; font-weight: bold;">[KirkaXpert]</span> ${msg}` });
       } else {
         console.log("[KirkaXpert]", msg);
       }
@@ -231,18 +247,40 @@ if (!window.location.href.startsWith(base_url)) {
       }
       processedAutoTrades.add(code);
 
+      activeAutoAccept = {
+        code: code,
+        theirItemsText: theirItemsText,
+        ourItemsText: ourItemsText,
+        step: 'accepting',
+        timestamp: Date.now()
+      };
+
       console.log("[KirkaXpert Auto-Accept] ACCEPTING TRADE:", code);
       updateStatusWidget(`Accepting wood trade ${code}...`, `${theirItemsText} ➜ ${ourItemsText}`);
       showNotification(`Wood Trade Detected (Code: ${code})! Auto-accepting...`);
 
+      // Send /trade accept
+      typeInChat('/trade accept ' + code);
+
+      // Wait 1.5 seconds to bypass chat spam filter and then type /trade confirm if no error was scanned
       setTimeout(() => {
-        typeInChat('/trade accept ' + code);
+        if (!activeAutoAccept || activeAutoAccept.code !== code) return;
+
+        activeAutoAccept.step = 'confirming';
+        updateStatusWidget(`Confirming trade ${code}...`, `${theirItemsText} ➜ ${ourItemsText}`);
+        
+        typeInChat('/trade confirm');
+
+        // Wait another 1.5 seconds before verifying completion success
         setTimeout(() => {
-          typeInChat('/trade confirm');
-          showNotification(`Trade ${code} Accepted! ✓`);
-          updateStatusWidget(`Trade ${code} Accepted! ✓`, `${theirItemsText} ➜ ${ourItemsText}`);
-        }, 800);
-      }, 150);
+          if (!activeAutoAccept || activeAutoAccept.code !== code) return;
+
+          showNotification(`Trade ${code} Completed Successfully! ✓`);
+          updateStatusWidget(`Completed! ✓`, `${theirItemsText} ➜ ${ourItemsText}`);
+          activeAutoAccept = null;
+        }, 1500);
+      }, 1500);
+
     } catch (e) {
       console.error("[KirkaXpert] Auto-accept error:", e);
     }
@@ -301,6 +339,40 @@ if (!window.location.href.startsWith(base_url)) {
       updateStatusWidget("Scanning chat...");
       const allEls = document.querySelectorAll('*');
       let latestCode = null;
+
+      // === PART 0: Read chat feedback to intercept failures/errors ===
+      const chatMessages = document.querySelectorAll('.desktop-game-interface .messages-cont .message, .chat .message');
+      if (chatMessages.length > 0 && activeAutoAccept) {
+        const lastMsg = chatMessages[chatMessages.length - 1];
+        const lastText = (lastMsg.innerText || lastMsg.textContent || '').trim();
+        const lowerMsg = lastText.toLowerCase();
+
+        // Check if latest message is a server error feedback
+        if (lowerMsg.includes('server:') && (
+          lowerMsg.includes('permission') ||
+          lowerMsg.includes('already') ||
+          lowerMsg.includes('not found') ||
+          lowerMsg.includes('error') ||
+          lowerMsg.includes('invalid') ||
+          lowerMsg.includes('cannot') ||
+          lowerMsg.includes('don\'t have')
+        )) {
+          const errorMsg = lastText.replace(/^server:\s*/i, '');
+          showNotification(`Trade Cancelled: ${errorMsg}`, true);
+          updateStatusWidget(`Failed: ${errorMsg}`, `${activeAutoAccept.theirItemsText} ➜ ${activeAutoAccept.ourItemsText}`);
+          
+          // Clear any stuck /trade confirm in chat input
+          clearChatInput();
+          activeAutoAccept = null;
+        }
+      }
+
+      // Check transaction timeout (e.g. 6 seconds)
+      if (activeAutoAccept && (Date.now() - activeAutoAccept.timestamp > 6000)) {
+        clearChatInput();
+        activeAutoAccept = null;
+        updateStatusWidget("Scanning chat...");
+      }
 
       // === PART 1: Inline buttons on every trade message ===
       for (let i = 0; i < allEls.length; i++) {
@@ -407,6 +479,7 @@ if (!window.location.href.startsWith(base_url)) {
   }
 })();
 // ===== END STANDALONE TRADE SCANNER =====
+
 
 const observeForElement = (selector, functionToRun, target = document.body) => {
   const observer = new MutationObserver((mutations, obs) => {
