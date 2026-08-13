@@ -36,12 +36,58 @@ if (!window.location.href.startsWith(base_url)) {
 // 1) Inline [ Quick Accept ] on every trade message
 // 2) ⚡ Quick Accept next to the ENTER button for the latest trade
 // 3) Auto-accept wood trades if enabled in settings
+// 4) On-screen HUD Status overlay widget
 (() => {
   const TRADE_REGEX = /\/trade\s+accept\s+([a-zA-Z0-9-]+)/i;
   const SCAN_INTERVAL = 400;
   let lastTradeCode = null;
   let chatBarBtn = null;
   const processedAutoTrades = new Set();
+  let statusWidget = null;
+
+  function updateStatusWidget(status, lastScanned = "None") {
+    try {
+      const freshSettings = ipcRenderer.sendSync("get-settings");
+      if (!freshSettings) return;
+      
+      const enabledText = freshSettings.auto_accept_wood ? 
+        '<span style="color: #22c55e; font-weight: bold;">ENABLED</span>' : 
+        '<span style="color: #ef4444; font-weight: bold;">DISABLED</span>';
+
+      if (!statusWidget) {
+        statusWidget = document.createElement("div");
+        statusWidget.id = "xpert-status-widget";
+        statusWidget.setAttribute('style', [
+          'position: fixed',
+          'bottom: 80px',
+          'right: 20px',
+          'background: rgba(15, 23, 42, 0.9)',
+          'backdrop-filter: blur(8px)',
+          'border: 1px solid rgba(56, 189, 248, 0.5)',
+          'color: #f8fafc',
+          'padding: 10px 14px',
+          'border-radius: 8px',
+          'font-family: monospace',
+          'font-size: 11px',
+          'z-index: 2147483647',
+          'box-shadow: 0 4px 12px rgba(0, 0, 0, 0.6)',
+          'pointer-events: none',
+          'line-height: 1.4',
+          'width: 280px'
+        ].join(' !important;') + ' !important;');
+        document.body.appendChild(statusWidget);
+      }
+
+      statusWidget.innerHTML = `
+        <div style="font-weight: bold; color: #38bdf8; border-bottom: 1px solid rgba(56, 189, 248, 0.3); padding-bottom: 4px; margin-bottom: 4px;">KIRKAXPERT TRADE ENGINE v1.0.5</div>
+        <div>Auto-Accept Wood: ${enabledText}</div>
+        <div>Last Trade: <span style="color: #e2e8f0; font-size: 10px;">${lastScanned}</span></div>
+        <div>Status: <span style="color: #38bdf8;">${status}</span></div>
+      `;
+    } catch (e) {
+      console.error(e);
+    }
+  }
 
   // Intercept window enter key handlers to stop chat open/close animation
   window.addEventListener('keydown', (e) => {
@@ -96,8 +142,8 @@ if (!window.location.href.startsWith(base_url)) {
           btn.style.setProperty('background', 'linear-gradient(135deg, #0ea5e9, #2563eb)', 'important');
           btn.style.setProperty('border-color', '#38bdf8', 'important');
         }, 3000);
-      }, 1200);
-    }, 200);
+      }, 800); // Faster confirm submission (800ms)
+    }, 150); // Faster initial submission (150ms)
   }
 
   function showNotification(msg) {
@@ -116,7 +162,10 @@ if (!window.location.href.startsWith(base_url)) {
   function checkAutoAccept(text, code) {
     try {
       const freshSettings = ipcRenderer.sendSync("get-settings");
-      if (!freshSettings || !freshSettings.auto_accept_wood) return;
+      if (!freshSettings || !freshSettings.auto_accept_wood) {
+        updateStatusWidget("Idle (Auto-Accept Disabled)");
+        return;
+      }
 
       const lowerText = text.toLowerCase();
       
@@ -148,6 +197,7 @@ if (!window.location.href.startsWith(base_url)) {
       console.log("[KirkaXpert Auto-Accept] Cleaned requested:", cleanOurItems);
 
       if (cleanOurItems !== 'wood') {
+        updateStatusWidget("Skipped: Not wood", `${theirItemsText} ➜ ${ourItemsText}`);
         return;
       }
 
@@ -159,13 +209,13 @@ if (!window.location.href.startsWith(base_url)) {
       }
       console.log("[KirkaXpert Auto-Accept] Parsed quantity:", quantity);
       if (quantity > 1) {
-        console.log("[KirkaXpert Auto-Accept] Quantity is greater than 1. Skipping.");
+        updateStatusWidget("Skipped: Wood qty > 1", `${theirItemsText} ➜ ${ourItemsText}`);
         return;
       }
 
       const afterOffering = lowerText.substring(offeringIdx);
       if (afterOffering.includes('private')) {
-        console.log("[KirkaXpert Auto-Accept] Private trade detected. Skipping.");
+        updateStatusWidget("Skipped: Private trade", `${theirItemsText} ➜ ${ourItemsText}`);
         return;
       }
 
@@ -175,6 +225,7 @@ if (!window.location.href.startsWith(base_url)) {
       processedAutoTrades.add(code);
 
       console.log("[KirkaXpert Auto-Accept] ACCEPTING TRADE:", code);
+      updateStatusWidget(`Accepting wood trade ${code}...`, `${theirItemsText} ➜ ${ourItemsText}`);
       showNotification(`Wood Trade Detected (Code: ${code})! Auto-accepting...`);
 
       setTimeout(() => {
@@ -182,8 +233,9 @@ if (!window.location.href.startsWith(base_url)) {
         setTimeout(() => {
           typeInChat('/trade confirm');
           showNotification(`Trade ${code} Accepted! ✓`);
-        }, 1200);
-      }, 500);
+          updateStatusWidget(`Trade ${code} Accepted! ✓`, `${theirItemsText} ➜ ${ourItemsText}`);
+        }, 800); // Faster confirm submission (800ms)
+      }, 150); // Faster initial submission (150ms)
     } catch (e) {
       console.error("[KirkaXpert] Auto-accept error:", e);
     }
@@ -239,6 +291,7 @@ if (!window.location.href.startsWith(base_url)) {
 
   function scan() {
     try {
+      updateStatusWidget("Scanning chat...");
       const allEls = document.querySelectorAll('*');
       let latestCode = null;
 
