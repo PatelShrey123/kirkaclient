@@ -79,7 +79,7 @@ if (!window.location.href.startsWith(base_url)) {
       }
 
       statusWidget.innerHTML = `
-        <div style="font-weight: bold; color: #38bdf8; border-bottom: 1px solid rgba(56, 189, 248, 0.3); padding-bottom: 4px; margin-bottom: 4px;">KIRKAXPERT TRADE ENGINE v1.0.5</div>
+        <div style="font-weight: bold; color: #38bdf8; border-bottom: 1px solid rgba(56, 189, 248, 0.3); padding-bottom: 4px; margin-bottom: 4px;">KIRKAXPERT TRADE ENGINE v1.0.6</div>
         <div>Auto-Accept Wood: ${enabledText}</div>
         <div>Last Trade: <span style="color: #e2e8f0; font-size: 10px;">${lastScanned}</span></div>
         <div>Status: <span style="color: #38bdf8;">${status}</span></div>
@@ -89,18 +89,6 @@ if (!window.location.href.startsWith(base_url)) {
     }
   }
 
-  // Intercept window enter key handlers to stop chat open/close animation
-  window.addEventListener('keydown', (e) => {
-    if (window.isXpertTyping && e.key === 'Enter') {
-      e.stopImmediatePropagation();
-    }
-  }, true);
-  window.addEventListener('keyup', (e) => {
-    if (window.isXpertTyping && e.key === 'Enter') {
-      e.stopImmediatePropagation();
-    }
-  }, true);
-
   function typeInChat(msg) {
     const input = document.querySelector('.chat input') ||
                   document.querySelector('#chat input') ||
@@ -108,17 +96,36 @@ if (!window.location.href.startsWith(base_url)) {
                   document.querySelector("input[placeholder*='message' i]") ||
                   document.querySelector('.desktop-game-interface input');
     if (input) {
+      input.focus();
+
       const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
       nativeSetter.call(input, msg);
       input.dispatchEvent(new Event('input', { bubbles: true }));
       
-      window.isXpertTyping = true;
-      try {
-        input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
-        input.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
-      } finally {
-        setTimeout(() => { window.isXpertTyping = false; }, 0);
+      // Dispatch key events
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+      input.dispatchEvent(new KeyboardEvent('keypress', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+      input.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+
+      // Find and click the ENTER button next to the input if it exists (for lobby/servers modal chat)
+      const chatBar = input.parentElement;
+      if (chatBar) {
+        const enterBtn = Array.from(chatBar.querySelectorAll('button')).find(b => 
+          b.textContent.toLowerCase().includes('enter') || 
+          b.innerText.toLowerCase().includes('enter')
+        );
+        if (enterBtn) {
+          enterBtn.click();
+        }
       }
+
+      // Trigger form submit if it exists
+      const form = input.closest('form');
+      if (form) {
+        form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      }
+
+      input.blur();
       return true;
     }
     return false;
@@ -142,8 +149,8 @@ if (!window.location.href.startsWith(base_url)) {
           btn.style.setProperty('background', 'linear-gradient(135deg, #0ea5e9, #2563eb)', 'important');
           btn.style.setProperty('border-color', '#38bdf8', 'important');
         }, 3000);
-      }, 800); // Faster confirm submission (800ms)
-    }, 150); // Faster initial submission (150ms)
+      }, 800);
+    }, 150);
   }
 
   function showNotification(msg) {
@@ -234,8 +241,8 @@ if (!window.location.href.startsWith(base_url)) {
           typeInChat('/trade confirm');
           showNotification(`Trade ${code} Accepted! ✓`);
           updateStatusWidget(`Trade ${code} Accepted! ✓`, `${theirItemsText} ➜ ${ourItemsText}`);
-        }, 800); // Faster confirm submission (800ms)
-      }, 150); // Faster initial submission (150ms)
+        }, 800);
+      }, 150);
     } catch (e) {
       console.error("[KirkaXpert] Auto-accept error:", e);
     }
@@ -320,8 +327,12 @@ if (!window.location.href.startsWith(base_url)) {
         const code = match[1];
         latestCode = code; // track latest
 
+        // Get the full message text from its closest container
+        const messageEl = el.closest('.message') || el.closest('.text') || el.parentElement || el;
+        const fullText = (messageEl.innerText || messageEl.textContent || '').trim();
+
         // Trigger auto-accept check
-        checkAutoAccept(text, code);
+        checkAutoAccept(fullText, code);
 
         // Create inline button
         const btn = document.createElement('button');
