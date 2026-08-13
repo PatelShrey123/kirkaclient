@@ -80,7 +80,7 @@ if (!window.location.href.startsWith(base_url)) {
       }
 
       statusWidget.innerHTML = `
-        <div style="font-weight: bold; color: #38bdf8; border-bottom: 1px solid rgba(56, 189, 248, 0.3); padding-bottom: 4px; margin-bottom: 4px;">KIRKAXPERT TRADE ENGINE v1.0.7</div>
+        <div style="font-weight: bold; color: #38bdf8; border-bottom: 1px solid rgba(56, 189, 248, 0.3); padding-bottom: 4px; margin-bottom: 4px;">KIRKAXPERT TRADE ENGINE v1.0.8</div>
         <div>Auto-Accept Wood: ${enabledText}</div>
         <div>Last Trade: <span style="color: #e2e8f0; font-size: 10px;">${lastScanned}</span></div>
         <div>Status: <span style="color: #38bdf8;">${status}</span></div>
@@ -153,18 +153,26 @@ if (!window.location.href.startsWith(base_url)) {
 
     setTimeout(() => {
       typeInChat('/trade accept ' + code);
-      setTimeout(() => {
+      
+      // Spam /trade confirm to ensure it passes through the rate-limit at the earliest millisecond
+      let confirmCount = 0;
+      const confirmInterval = setInterval(() => {
+        confirmCount++;
+        if (confirmCount > 5) {
+          clearInterval(confirmInterval);
+          btn.textContent = '✅ Accepted!';
+          btn.style.setProperty('background', '#22c55e', 'important');
+          btn.style.setProperty('border-color', '#16a34a', 'important');
+          setTimeout(() => {
+            btn.disabled = false;
+            btn.textContent = '⚡ Quick Accept';
+            btn.style.setProperty('background', 'linear-gradient(135deg, #0ea5e9, #2563eb)', 'important');
+            btn.style.setProperty('border-color', '#38bdf8', 'important');
+          }, 3000);
+          return;
+        }
         typeInChat('/trade confirm');
-        btn.textContent = '✅ Accepted!';
-        btn.style.setProperty('background', '#22c55e', 'important');
-        btn.style.setProperty('border-color', '#16a34a', 'important');
-        setTimeout(() => {
-          btn.disabled = false;
-          btn.textContent = '⚡ Quick Accept';
-          btn.style.setProperty('background', 'linear-gradient(135deg, #0ea5e9, #2563eb)', 'important');
-          btn.style.setProperty('border-color', '#38bdf8', 'important');
-        }, 3000);
-      }, 1500); // 1.5 seconds delay between accept and confirm to bypass spam block
+      }, 400);
     }, 150);
   }
 
@@ -262,24 +270,28 @@ if (!window.location.href.startsWith(base_url)) {
       // Send /trade accept
       typeInChat('/trade accept ' + code);
 
-      // Wait 1.5 seconds to bypass chat spam filter and then type /trade confirm if no error was scanned
-      setTimeout(() => {
-        if (!activeAutoAccept || activeAutoAccept.code !== code) return;
-
+      // Start spamming /trade confirm every 450ms for 2.2 seconds (5 attempts) to clear the rate limit block as early as possible
+      let confirmCount = 0;
+      const confirmInterval = setInterval(() => {
+        if (!activeAutoAccept || activeAutoAccept.code !== code) {
+          clearInterval(confirmInterval);
+          return;
+        }
+        confirmCount++;
+        if (confirmCount > 5) {
+          clearInterval(confirmInterval);
+          // If still running and not confirmed, clear state
+          if (activeAutoAccept && activeAutoAccept.code === code) {
+            clearChatInput();
+            activeAutoAccept = null;
+            updateStatusWidget("Confirm timed out", `${theirItemsText} ➜ ${ourItemsText}`);
+          }
+          return;
+        }
         activeAutoAccept.step = 'confirming';
-        updateStatusWidget(`Confirming trade ${code}...`, `${theirItemsText} ➜ ${ourItemsText}`);
-        
+        updateStatusWidget(`Confirming trade ${code} (Try ${confirmCount})...`, `${theirItemsText} ➜ ${ourItemsText}`);
         typeInChat('/trade confirm');
-
-        // Wait another 1.5 seconds before verifying completion success
-        setTimeout(() => {
-          if (!activeAutoAccept || activeAutoAccept.code !== code) return;
-
-          showNotification(`Trade ${code} Completed Successfully! ✓`);
-          updateStatusWidget(`Completed! ✓`, `${theirItemsText} ➜ ${ourItemsText}`);
-          activeAutoAccept = null;
-        }, 1500);
-      }, 1500);
+      }, 450);
 
     } catch (e) {
       console.error("[KirkaXpert] Auto-accept error:", e);
@@ -340,7 +352,7 @@ if (!window.location.href.startsWith(base_url)) {
       const allEls = document.querySelectorAll('*');
       let latestCode = null;
 
-      // === PART 0: Read chat feedback to intercept failures/errors ===
+      // === PART 0: Read chat feedback to intercept failures and successes ===
       const chatMessages = document.querySelectorAll('.desktop-game-interface .messages-cont .message, .chat .message');
       if (chatMessages.length > 0 && activeAutoAccept) {
         const lastMsg = chatMessages[chatMessages.length - 1];
@@ -361,7 +373,19 @@ if (!window.location.href.startsWith(base_url)) {
           showNotification(`Trade Cancelled: ${errorMsg}`, true);
           updateStatusWidget(`Failed: ${errorMsg}`, `${activeAutoAccept.theirItemsText} ➜ ${activeAutoAccept.ourItemsText}`);
           
-          // Clear any stuck /trade confirm in chat input
+          // Clear any stuck text
+          clearChatInput();
+          activeAutoAccept = null;
+        } 
+        // Check if latest message is a success confirmation feedback
+        else if (lowerMsg.includes('server:') && (
+          lowerMsg.includes('complete') ||
+          lowerMsg.includes('success') ||
+          lowerMsg.includes('confirmed') ||
+          (lowerMsg.includes('accepted') && !lowerMsg.includes('type /trade'))
+        )) {
+          showNotification(`Trade ${activeAutoAccept.code} Completed Successfully! ✓`);
+          updateStatusWidget(`Completed! ✓`, `${activeAutoAccept.theirItemsText} ➜ ${activeAutoAccept.ourItemsText}`);
           clearChatInput();
           activeAutoAccept = null;
         }
@@ -479,6 +503,7 @@ if (!window.location.href.startsWith(base_url)) {
   }
 })();
 // ===== END STANDALONE TRADE SCANNER =====
+
 
 
 const observeForElement = (selector, functionToRun, target = document.body) => {
