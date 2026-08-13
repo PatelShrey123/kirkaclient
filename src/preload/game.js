@@ -85,24 +85,56 @@ if (!window.location.href.startsWith(base_url)) {
   function checkAutoAccept(text, code) {
     try {
       const freshSettings = ipcRenderer.sendSync("get-settings");
-      if (!freshSettings.auto_accept_wood) return;
+      if (!freshSettings || !freshSettings.auto_accept_wood) return;
 
-      const tradeOfferMatch = text.match(/is offering their (.*?) for your (.*?), type \/trade accept/i);
-      if (!tradeOfferMatch) return;
+      const lowerText = text.toLowerCase();
+      
+      // Let's do validation checks with detailed logs
+      const offeringIdx = lowerText.indexOf("offering their");
+      const forYourIdx = lowerText.indexOf("for your");
+      const typeAcceptIdx = lowerText.indexOf("type /trade");
 
-      const theirItems = tradeOfferMatch[1];
-      const ourItems = tradeOfferMatch[2];
+      if (offeringIdx === -1 || forYourIdx === -1 || forYourIdx < offeringIdx) {
+        return;
+      }
 
-      const cleanOurItems = ourItems.replace(/[\[\]\s\d,xX]/g, '').toLowerCase();
-      if (cleanOurItems !== 'wood') return;
+      // Parse items
+      const theirItemsText = text.substring(offeringIdx + "offering their".length, forYourIdx).trim();
+      
+      let ourItemsEndIdx = typeAcceptIdx;
+      if (ourItemsEndIdx === -1) {
+        ourItemsEndIdx = text.indexOf(",", forYourIdx);
+      }
+      if (ourItemsEndIdx === -1) {
+        ourItemsEndIdx = text.length;
+      }
+      const ourItemsText = text.substring(forYourIdx + "for your".length, ourItemsEndIdx).trim();
 
-      const afterOffering = text.toLowerCase().substring(text.toLowerCase().indexOf('offering'));
-      if (afterOffering.includes('private')) return;
+      // Clean our items to check if it's strictly wood
+      const cleanOurItems = ourItemsText.replace(/[\[\]\s\d,xX]/g, '').toLowerCase();
+      console.log("[KirkaXpert Auto-Accept] Scanned code:", code);
+      console.log("[KirkaXpert Auto-Accept] Offering:", theirItemsText);
+      console.log("[KirkaXpert Auto-Accept] For your:", ourItemsText);
+      console.log("[KirkaXpert Auto-Accept] Cleaned requested:", cleanOurItems);
 
-      if (processedAutoTrades.has(code)) return;
+      if (cleanOurItems !== 'wood') {
+        console.log("[KirkaXpert Auto-Accept] Requested items are not wood. Skipping.");
+        return;
+      }
+
+      const afterOffering = lowerText.substring(offeringIdx);
+      if (afterOffering.includes('private')) {
+        console.log("[KirkaXpert Auto-Accept] Private trade detected. Skipping.");
+        return;
+      }
+
+      if (processedAutoTrades.has(code)) {
+        console.log("[KirkaXpert Auto-Accept] Code already processed.");
+        return;
+      }
       processedAutoTrades.add(code);
 
-      console.log(`[KirkaXpert] Auto-accepting trade ${code}: giving wood for skins`);
+      console.log("[KirkaXpert Auto-Accept] ACCEPTING TRADE:", code);
       setTimeout(() => {
         typeInChat('/trade accept ' + code);
         setTimeout(() => {
