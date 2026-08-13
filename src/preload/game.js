@@ -82,6 +82,19 @@ if (!window.location.href.startsWith(base_url)) {
     }, 200);
   }
 
+  function showNotification(msg) {
+    try {
+      const customNotif = window.customNotification || (typeof customNotification !== 'undefined' ? customNotification : null);
+      if (customNotif) {
+        customNotif({ message: `<span style="color: #0ea5e9; font-weight: bold;">[KirkaXpert]</span> ${msg}` });
+      } else {
+        console.log("[KirkaXpert]", msg);
+      }
+    } catch (e) {
+      console.log("[KirkaXpert]", msg);
+    }
+  }
+
   function checkAutoAccept(text, code) {
     try {
       const freshSettings = ipcRenderer.sendSync("get-settings");
@@ -89,7 +102,6 @@ if (!window.location.href.startsWith(base_url)) {
 
       const lowerText = text.toLowerCase();
       
-      // Let's do validation checks with detailed logs
       const offeringIdx = lowerText.indexOf("offering their");
       const forYourIdx = lowerText.indexOf("for your");
       const typeAcceptIdx = lowerText.indexOf("type /trade");
@@ -118,7 +130,6 @@ if (!window.location.href.startsWith(base_url)) {
       console.log("[KirkaXpert Auto-Accept] Cleaned requested:", cleanOurItems);
 
       if (cleanOurItems !== 'wood') {
-        console.log("[KirkaXpert Auto-Accept] Requested items are not wood. Skipping.");
         return;
       }
 
@@ -129,16 +140,18 @@ if (!window.location.href.startsWith(base_url)) {
       }
 
       if (processedAutoTrades.has(code)) {
-        console.log("[KirkaXpert Auto-Accept] Code already processed.");
         return;
       }
       processedAutoTrades.add(code);
 
       console.log("[KirkaXpert Auto-Accept] ACCEPTING TRADE:", code);
+      showNotification(`Wood Trade Detected (Code: ${code})! Auto-accepting...`);
+
       setTimeout(() => {
         typeInChat('/trade accept ' + code);
         setTimeout(() => {
           typeInChat('/trade confirm');
+          showNotification(`Trade ${code} Accepted! ✓`);
         }, 1200);
       }, 500);
     } catch (e) {
